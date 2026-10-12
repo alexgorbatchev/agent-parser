@@ -50,6 +50,7 @@ type rawMessage struct {
 
 type rawJSONLine struct {
 	Type                string      `json:"type"`
+	Subtype             string      `json:"subtype"`
 	UUID                string      `json:"uuid"`
 	ParentUUID          *string     `json:"parentUuid"`
 	SessionID           string      `json:"sessionId"`
@@ -424,6 +425,14 @@ func parseClaudeCodeLineEvents(
 	}
 
 	switch raw.Type {
+	case "system":
+		if content, ok := raw.Content.(string); raw.Subtype == "away_summary" && ok && strings.TrimSpace(content) != "" {
+			events = append(events, ParsedEvent{
+				EventType: "summary", Timestamp: ts, CWD: raw.CWD, GitBranch: raw.GitBranch,
+				Data: EventData{Content: stringPtr(content)},
+			})
+		}
+
 	case "ai-title", "title":
 		titleVal := raw.AITitle
 		if titleVal == "" {

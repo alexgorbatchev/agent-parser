@@ -913,7 +913,9 @@ export interface IClaudeSystemRecord extends IClaudeConversationalBase {
     | "local_command"
     | "stop_hook_summary"
     | "compact_boundary"
+    | "away_summary"
     | string;
+  /** Native work recap when subtype is away_summary (observed in Claude Code 2.1.292). */
   content?: string;
   durationMs?: number;
   messageCount?: number;

@@ -143,16 +143,16 @@ type rawCodexThreadSpawn struct {
 }
 
 type rawCodexSessionMetaPayload struct {
-	ID                string           `json:"id"`
-	SessionID         string           `json:"session_id,omitempty"`
-	Timestamp         string           `json:"timestamp"`
-	CWD               string           `json:"cwd"`
-	Originator        string           `json:"originator"`
-	CLIVersion        string           `json:"cli_version"`
-	Source            interface{}      `json:"source"`
-	Model             string           `json:"model,omitempty"`
-	ModelProvider     string           `json:"model_provider"`
-	BaseInstructions  *struct {
+	ID               string      `json:"id"`
+	SessionID        string      `json:"session_id,omitempty"`
+	Timestamp        string      `json:"timestamp"`
+	CWD              string      `json:"cwd"`
+	Originator       string      `json:"originator"`
+	CLIVersion       string      `json:"cli_version"`
+	Source           interface{} `json:"source"`
+	Model            string      `json:"model,omitempty"`
+	ModelProvider    string      `json:"model_provider"`
+	BaseInstructions *struct {
 		Text string `json:"text"`
 	} `json:"base_instructions"`
 	Git               *rawCodexGitMeta `json:"git"`
@@ -200,11 +200,12 @@ type rawCodexRateLimits struct {
 }
 
 type rawCodexEventMsgPayload struct {
+	Item               json.RawMessage         `json:"item,omitempty"`
 	Type               string                  `json:"type"`
 	Message            string                  `json:"message"`
 	TurnID             string                  `json:"turn_id"`
-	StartedAt          string                  `json:"started_at"`
-	CompletedAt        string                  `json:"completed_at"`
+	StartedAt          json.RawMessage         `json:"started_at"`
+	CompletedAt        json.RawMessage         `json:"completed_at"`
 	DurationMS         int64                   `json:"duration_ms"`
 	LastAgentMessage   string                  `json:"last_agent_message"`
 	CodexErrorInfo     interface{}             `json:"codex_error_info,omitempty"`
@@ -218,16 +219,89 @@ type rawCodexEventMsgPayload struct {
 	EncryptedContent string `json:"encrypted_content"`
 }
 
+type rawCodexAgentMessage struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	Questions []map[string]interface{} `json:"questions"`
+}
+
+func parseCodexCompletedItem(raw json.RawMessage, ts int64) ([]ParsedEvent, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed item: %w", err)
+	}
+	if header.Type != "AgentMessage" {
+		return nil, nil
+	}
+	var item rawCodexAgentMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed agent message: %w", err)
+	}
+	var content strings.Builder
+	for _, block := range item.Content {
+		if block.Type == "Text" {
+			content.WriteString(block.Text)
+		}
+	}
+	data := EventData{Role: stringPtr("assistant"), Content: stringPtr(content.String())}
+	eventType := "agent_message"
+	var questions []string
+	for _, question := range item.Questions {
+		if text := codexQuestionText(question); text != "" {
+			questions = append(questions, text)
+		}
+	}
+	if len(questions) > 0 {
+		eventType = "question_prompt"
+		data.Question = stringPtr(strings.Join(questions, "\n"))
+		if item.ID != "" {
+			data.ToolCallID = stringPtr(item.ID)
+		}
+	}
+	if strings.TrimSpace(content.String()) == "" && data.Question == nil {
+		return nil, nil
+	}
+	return []ParsedEvent{{EventType: eventType, Timestamp: ts, Data: data}}, nil
+}
+
+func codexQuestionText(input map[string]interface{}) string {
+	for _, key := range []string{"question", "prompt", "title"} {
+		if text, ok := input[key].(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	var parts []string
+	if questions, ok := input["questions"].([]interface{}); ok {
+		for _, question := range questions {
+			if q, ok := question.(map[string]interface{}); ok {
+				if text := codexQuestionText(q); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 type rawCodexResponseItemPayload struct {
-	Type      string      `json:"type"`
-	Role      string      `json:"role"`
-	Name      string      `json:"name"`
-	CallID    string      `json:"call_id"`
-	Arguments string      `json:"arguments"`
-	Input     interface{} `json:"input,omitempty"`
-	Output    string      `json:"output"`
-	Query     string      `json:"query"`
-	Content   interface{} `json:"content"`
+	Type      string             `json:"type"`
+	Role      string             `json:"role"`
+	Name      string             `json:"name"`
+	CallID    string             `json:"call_id"`
+	Arguments string             `json:"arguments"`
+	Input     interface{}        `json:"input,omitempty"`
+	Output    rawCodexToolOutput `json:"output"`
+	Query     string             `json:"query"`
+	Content   interface{}        `json:"content"`
 	Summary   []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -423,6 +497,13 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 		}
 
 		switch evt.Type {
+		case "item_completed":
+			completed, err := parseCodexCompletedItem(evt.Item, ts)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, completed...)
+
 		case "user_message":
 			cleanPrompt := CleanCodexPrompt(evt.Message)
 			if cleanPrompt != "" {
@@ -577,8 +658,9 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			}
 
 		case "task_started":
-			if evt.StartedAt != "" {
-				ts = parseTimestamp(evt.StartedAt)
+			ts, err := parseCodexTaskTimestamp(evt.StartedAt, ts)
+			if err != nil {
+				return nil, fmt.Errorf("parsing task started_at: %w", err)
 			}
 			events = append(events, ParsedEvent{
 				EventType: "turn_start",
@@ -589,8 +671,9 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			})
 
 		case "task_complete":
-			if evt.CompletedAt != "" {
-				ts = parseTimestamp(evt.CompletedAt)
+			ts, err := parseCodexTaskTimestamp(evt.CompletedAt, ts)
+			if err != nil {
+				return nil, fmt.Errorf("parsing task completed_at: %w", err)
 			}
 			var contentPtr *string
 			if evt.LastAgentMessage != "" {
@@ -798,15 +881,8 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				callIDPtr = stringPtr(resp.CallID)
 			}
 
-			if resp.Name == "AskUserQuestion" || resp.Name == "ask_user" || resp.Name == "ask_question" {
-				qText := ""
-				if inputMap != nil {
-					if q, ok := inputMap["question"].(string); ok {
-						qText = q
-					} else if p, ok := inputMap["prompt"].(string); ok {
-						qText = p
-					}
-				}
+			if resp.Name == "AskUserQuestion" || resp.Name == "ask_user" || resp.Name == "ask_question" || resp.Name == "request_user_input" || resp.Name == "request_user_input_async" {
+				qText := codexQuestionText(inputMap)
 				fileMod := NormalizeFileModification(resp.Name, inputMap)
 				events = append(events, ParsedEvent{
 					EventType: "question_prompt",
@@ -836,13 +912,14 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			}
 
 		case "function_call_output", "custom_tool_call_output":
+			output := string(resp.Output)
 			var callIDPtr *string
 			if resp.CallID != "" {
 				callIDPtr = stringPtr(resp.CallID)
 			}
-			isErr := strings.Contains(strings.ToLower(resp.Output), "exit code: 1") ||
-				strings.Contains(strings.ToLower(resp.Output), "error:") ||
-				strings.Contains(strings.ToLower(resp.Output), "command failed")
+			isErr := strings.Contains(strings.ToLower(output), "exit code: 1") ||
+				strings.Contains(strings.ToLower(output), "error:") ||
+				strings.Contains(strings.ToLower(output), "command failed")
 
 			events = append(events, ParsedEvent{
 				EventType: "tool_result",
@@ -850,7 +927,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				Data: EventData{
 					Role:       stringPtr("toolResult"),
 					ToolCallID: callIDPtr,
-					ToolOutput: stringPtr(resp.Output),
+					ToolOutput: stringPtr(output),
 					IsError:    boolPtr(isErr),
 				},
 			})
@@ -936,7 +1013,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				Data: EventData{
 					Role:       stringPtr("toolResult"),
 					ToolCallID: callIDPtr,
-					ToolOutput: stringPtr(resp.Output),
+					ToolOutput: stringPtr(string(resp.Output)),
 				},
 			})
 		}

@@ -7,6 +7,7 @@
 - **Token usage tracking**: Extracts granular token metrics (input, output, cache read/write, reasoning) and harness-reported costs.
 - **Session title extraction**: Automatically identifies session titles from user prompts, explicit title records (`ai-title`, `custom-title`), and first human messages while stripping harness-injected synthetic context blocks.
 - **Rate limit and error detection**: Captures HTTP status codes, rate limit resets, retry delays, and tool execution failures.
+- **Native recaps and questions**: Emits Claude Code `system/away_summary` text as `summary` events. Codex `request_user_input`, `request_user_input_async`, and completed `AgentMessage` questions produce `question_prompt` events; ordinary completed agent messages produce `agent_message` events.
 - **Zero CGo overhead**: Reads OpenCode SQLite databases via pure Go WebAssembly drivers (`github.com/ncruces/go-sqlite3`), running anywhere Go compiles.
 
 # How It Works

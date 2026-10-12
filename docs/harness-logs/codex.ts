@@ -396,7 +396,8 @@ export interface ICodexTokenCountPayload {
 export interface ICodexTaskStartedPayload {
   readonly type: "task_started";
   readonly turn_id: string;
-  readonly started_at: string;
+  /** Unix seconds in native rollouts; RFC3339 strings also occur. */
+  readonly started_at?: number | string | null;
   readonly model_context_window?: number;
   readonly collaboration_mode_kind?: string;
 }
@@ -405,7 +406,9 @@ export interface ICodexTaskCompletePayload {
   readonly type: "task_complete";
   readonly turn_id: string;
   readonly last_agent_message?: string;
-  readonly completed_at: string;
+  /** Unix seconds in native rollouts; RFC3339 strings also occur. */
+  readonly started_at?: number | string | null;
+  readonly completed_at?: number | string | null;
   readonly duration_ms: number;
 }
 
@@ -441,7 +444,37 @@ export interface ICodexErrorPayload {
   readonly codex_error_info?: CodexErrorInfo | null;
 }
 
+/** Agent message completion observed in Codex 0.162.0, including async questions. */
+export interface ICodexItemCompletedPayload {
+  readonly type: "item_completed";
+  readonly thread_id?: string;
+  readonly turn_id?: string;
+  readonly started_at_ms?: number;
+  readonly completed_at_ms?: number;
+  readonly item: ICodexCompletedAgentMessage | Readonly<Record<string, unknown>>;
+}
+
+export interface ICodexCompletedAgentMessage {
+  readonly type: "AgentMessage";
+  readonly id?: string;
+  readonly content: readonly ICodexAgentMessageText[];
+  readonly phase?: string;
+  readonly delivery?: string;
+  readonly questions?: readonly ICodexAgentQuestion[];
+}
+
+export interface ICodexAgentMessageText {
+  readonly type: "Text";
+  readonly text: string;
+}
+
+export interface ICodexAgentQuestion {
+  readonly title: string;
+  readonly options?: readonly string[] | null;
+}
+
 export type CodexEventMsgPayload =
+  | ICodexItemCompletedPayload
   | ICodexUserMessagePayload
   | ICodexAgentMessagePayload
   | ICodexReasoningPayload
@@ -481,12 +514,54 @@ export interface ICodexFunctionCallPayload {
   readonly input?: string | Readonly<Record<string, unknown>>;
 }
 
+/** Tool output body serialized directly as a string or an ordered content array.
+ * @see https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs
+ */
+export interface ICodexToolOutputTextItem {
+  readonly type: "input_text";
+  readonly text: string;
+}
+
+export interface ICodexToolOutputImageMetadata {
+  readonly type: "input_image";
+  readonly detail?: "auto" | "low" | "high" | "original";
+}
+
+export interface ICodexInlineImageReference {
+  readonly image_url: string;
+}
+
+export interface ICodexFileImageReference {
+  readonly file_id: string;
+}
+
+export type CodexToolOutputImageItem = ICodexToolOutputImageMetadata &
+  (ICodexInlineImageReference | ICodexFileImageReference);
+
+export interface ICodexToolOutputAudioItem {
+  readonly type: "input_audio";
+  readonly audio_url: string;
+}
+
+export interface ICodexToolOutputEncryptedItem {
+  readonly type: "encrypted_content";
+  readonly encrypted_content: string;
+}
+
+export type CodexToolOutputContentItem =
+  | ICodexToolOutputTextItem
+  | CodexToolOutputImageItem
+  | ICodexToolOutputAudioItem
+  | ICodexToolOutputEncryptedItem;
+
+export type CodexToolOutputBody = string | readonly CodexToolOutputContentItem[];
+
 export interface ICodexFunctionCallOutputPayload {
   readonly type: "function_call_output";
   /** Correlating call ID. */
   readonly call_id: string;
-  /** Result string output (for shell: contains wall time, exit code, stdout). */
-  readonly output: string;
+  /** Text output or structured content; normalized toolOutput preserves arrays as JSON. */
+  readonly output: CodexToolOutputBody;
 }
 
 export interface ICodexCustomToolCallPayload {
@@ -505,8 +580,8 @@ export interface ICodexCustomToolCallOutputPayload {
   readonly type: "custom_tool_call_output";
   /** Correlating call ID. */
   readonly call_id: string;
-  /** Result string output from custom tool execution. */
-  readonly output: string;
+  /** Text output or structured content; normalized toolOutput preserves arrays as JSON. */
+  readonly output: CodexToolOutputBody;
 }
 
 export interface ICodexResponseReasoningPayload {

@@ -12,6 +12,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 - Format Go source: `just fmt`
 
 ## Key gotchas
+- **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex completed `AgentMessage` items emit conversational `agent_message` or `question_prompt` when structured questions are present; preserve question tool arguments and call IDs.
 
 - **Faithful parsing**: Parsers decode logs faithfully without external model catalog lookups or synthetic metrics (such as context window fullness calculations); downstream consumers handle catalog enrichment.
 - **Pure Go SQLite**: OpenCode SQLite reading uses `github.com/ncruces/go-sqlite3` (WebAssembly-backed pure Go). No CGo or local SQLite C libraries are required.

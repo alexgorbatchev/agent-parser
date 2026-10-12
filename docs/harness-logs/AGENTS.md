@@ -56,7 +56,8 @@ bun x tsc --noEmit docs/harness-logs/opencode.ts
 
 ### 3. Argument String-Encoding (Codex & OpenCode)
 
-- Codex `function_call.arguments` and tool outputs are JSON encoded as **strings** inside the JSON payload, requiring a second parse pass.
+- Codex `function_call.arguments` is JSON encoded as a **string**, requiring a second parse pass. Both `function_call_output.output` and `custom_tool_call_output.output` accept strings or ordered content arrays; preserve array bodies as JSON in normalized `toolOutput` strings, including media and unknown blocks.
+- Codex task lifecycle `started_at` and `completed_at` numbers are Unix seconds. Convert them to milliseconds for normalized events; retain RFC3339 string support and use the envelope timestamp when the field is absent, null, or empty. Do not apply this seconds conversion to other harness timestamps.
 - OpenCode `session.model`, `message.data`, and `part.data` columns are JSON stored as TEXT in SQLite rows.
 
 ### 4. Synthetic First Turns

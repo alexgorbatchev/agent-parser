@@ -15,10 +15,10 @@ coverage:
     set -euo pipefail
     go test -race -coverprofile=coverage.out ./...
     total="$(go tool cover -func=coverage.out | awk '/^total:/ { print substr($3, 1, length($3) - 1) }')"
-    if awk "BEGIN { exit ({{min_coverage}} <= ${total}) ? 0 : 1 }"; then
-        echo "statement coverage ${total}% meets the {{min_coverage}}% floor"
+    if awk "BEGIN { exit ({{ min_coverage }} <= ${total}) ? 0 : 1 }"; then
+        echo "statement coverage ${total}% meets the {{ min_coverage }}% floor"
     else
-        echo "statement coverage ${total}% is below the {{min_coverage}}% floor" >&2
+        echo "statement coverage ${total}% is below the {{ min_coverage }}% floor" >&2
         exit 1
     fi
 
@@ -41,3 +41,7 @@ check:
     just lint
     just coverage
     just typecheck
+
+# Prepare dependencies and generated assets for local development
+setup:
+    go mod download

@@ -15,7 +15,7 @@ import (
 )
 
 type rawContentBlock struct {
-	Type      string                 `json:"type"` // "thinking" | "tool_use" | "text" | "tool_result"
+	Type      string                 `json:"type"` // "thinking" | "tool_use" | "text" | "tool_result" | "image"
 	Text      string                 `json:"text,omitempty"`
 	Thinking  string                 `json:"thinking,omitempty"`
 	Name      string                 `json:"name,omitempty"`
@@ -24,6 +24,7 @@ type rawContentBlock struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	Content   interface{}            `json:"content,omitempty"`
 	IsError   *bool                  `json:"is_error,omitempty"`
+	Source    *rawClaudeImageSource  `json:"source,omitempty"`
 }
 
 type rawUsage struct {
@@ -564,12 +565,14 @@ func parseClaudeCodeLineEvents(
 							ToolCallID: toolCallID,
 							ToolOutput: stringPtr(output),
 							IsError:    boolPtr(isErr),
+							Images:     claudeImages(parseClaudeContentBlocks(b.Content)),
 						},
 					})
 				}
 			}
 
-			if len(textParts) > 0 && !hasToolResult {
+			images := claudeImages(blocks)
+			if (len(textParts) > 0 || len(images) > 0) && !hasToolResult {
 				fullPrompt := strings.Join(textParts, "\n")
 				var titlePtr *string
 				shouldSetTitle := !isSubagent && (explicitTitles == nil || (!explicitTitles[sessKey] && sessionTitles[sessKey] == ""))
@@ -591,6 +594,7 @@ func parseClaudeCodeLineEvents(
 						Content:    stringPtr(fullPrompt),
 						LastPrompt: stringPtr(fullPrompt),
 						Title:      titlePtr,
+						Images:     images,
 					},
 				})
 			}

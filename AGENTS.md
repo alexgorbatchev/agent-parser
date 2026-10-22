@@ -14,6 +14,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 ## Key gotchas
 - **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex completed `AgentMessage` items emit conversational `agent_message` or `question_prompt` when structured questions are present; preserve question tool arguments and call IDs.
 
+- **Images**: Prompt and tool-result images go in `EventData.Images`; text fields keep only text. Codex tool outputs are the exception: `ToolOutput` keeps the raw content array, image data included, so media and unknown blocks are not lost.
 - **Faithful parsing**: Parsers decode logs faithfully without external model catalog lookups or synthetic metrics (such as context window fullness calculations); downstream consumers handle catalog enrichment.
 - **Pure Go SQLite**: OpenCode SQLite reading uses `github.com/ncruces/go-sqlite3` (WebAssembly-backed pure Go). No CGo or local SQLite C libraries are required.
 - **Read-only DB access**: OpenCode database handles must strictly be opened in read-only mode (`?mode=ro`) to prevent write locks or interfering with running agents.

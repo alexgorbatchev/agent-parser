@@ -6,17 +6,25 @@ import (
 )
 
 // Codex serializes tool outputs as text or content arrays. Preserve arrays as
-// JSON in the normalized string field so media and unknown blocks are not lost.
-type rawCodexToolOutput string
+// JSON in the normalized text so media and unknown blocks are not lost, and
+// read their images.
+type rawCodexToolOutput struct {
+	text   string
+	images []Image
+}
 
 func (o *rawCodexToolOutput) UnmarshalJSON(raw []byte) error {
-	if bytes.HasPrefix(raw, []byte("[")) {
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, raw); err != nil {
-			return err
-		}
-		*o = rawCodexToolOutput(compact.String())
-		return nil
+	if !bytes.HasPrefix(raw, []byte("[")) {
+		return json.Unmarshal(raw, &o.text)
 	}
-	return json.Unmarshal(raw, (*string)(o))
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return err
+	}
+	var items []interface{}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return err
+	}
+	*o = rawCodexToolOutput{text: compact.String(), images: codexImages(items)}
+	return nil
 }

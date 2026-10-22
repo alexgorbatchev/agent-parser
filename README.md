@@ -4,6 +4,7 @@
 
 - **Multi-harness log parsing**: Streams and decodes log entries from Claude Code (JSONL), Pi (DAG trees), OpenAI Codex (date-partitioned rollout JSONL), and OpenCode (SQLite WAL databases).
 - **Tool call and diff normalization**: Converts disparate edit and write operations across harnesses (`Edit`, `MultiEdit`, `Write`, `apply_patch`) into a canonical `FileModification` struct with unified line-by-line diff hunks.
+- **Images**: Images attached to prompts and tool results arrive in `EventData.Images` as base64 data with its media type, or as the URL or file ID the harness referenced, for Claude Code, Pi, and OpenAI Codex. A prompt with only an image still starts a turn.
 - **Token usage tracking**: Extracts granular token metrics (input, output, cache read/write, reasoning) and harness-reported costs.
 - **Session title extraction**: Automatically identifies session titles from user prompts, explicit title records (`ai-title`, `custom-title`), and first human messages while stripping harness-injected synthetic context blocks.
 - **Rate limit and error detection**: Captures HTTP status codes, rate limit resets, retry delays, and tool execution failures.
@@ -109,6 +110,13 @@ type FileModification struct {
 	FilePath string     `json:"filePath"`
 	Hunks    []DiffHunk `json:"hunks,omitempty"`
 	Content  *string    `json:"content,omitempty"`
+}
+
+type Image struct {
+	MediaType string `json:"mediaType,omitempty"` // with Data
+	Data      string `json:"data,omitempty"`      // base64
+	URL       string `json:"url,omitempty"`
+	FileID    string `json:"fileId,omitempty"`
 }
 
 type TokenUsage struct {

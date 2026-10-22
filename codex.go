@@ -912,7 +912,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			}
 
 		case "function_call_output", "custom_tool_call_output":
-			output := string(resp.Output)
+			output := resp.Output.text
 			var callIDPtr *string
 			if resp.CallID != "" {
 				callIDPtr = stringPtr(resp.CallID)
@@ -929,6 +929,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 					ToolCallID: callIDPtr,
 					ToolOutput: stringPtr(output),
 					IsError:    boolPtr(isErr),
+					Images:     resp.Output.images,
 				},
 			})
 
@@ -936,7 +937,8 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			contentStr := extractContentString(resp.Content)
 			if resp.Role == "user" {
 				cleanPrompt := CleanCodexPrompt(contentStr)
-				if cleanPrompt != "" {
+				images := codexImages(resp.Content)
+				if cleanPrompt != "" || len(images) > 0 {
 					title, hasTitle := ExtractCodexTitleFromPrompt(cleanPrompt)
 					var titlePtr *string
 					if hasTitle {
@@ -950,6 +952,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 							Content:    stringPtr(cleanPrompt),
 							LastPrompt: stringPtr(cleanPrompt),
 							Title:      titlePtr,
+							Images:     images,
 						},
 					})
 				}
@@ -1013,7 +1016,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				Data: EventData{
 					Role:       stringPtr("toolResult"),
 					ToolCallID: callIDPtr,
-					ToolOutput: stringPtr(string(resp.Output)),
+					ToolOutput: stringPtr(resp.Output.text),
 				},
 			})
 		}

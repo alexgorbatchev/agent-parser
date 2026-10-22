@@ -32,6 +32,15 @@ type TokenUsage struct {
 	Total      int64 `json:"total"`
 }
 
+// Image is an image a harness recorded in a prompt or tool result. Data holds inline base64 bytes described by
+// MediaType; URL or FileID instead references an image the harness did not inline.
+type Image struct {
+	MediaType string `json:"mediaType,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+	FileID    string `json:"fileId,omitempty"`
+}
+
 // EventData holds the normalized payload for a parsed agent event.
 type EventData struct {
 	Role               *string                `json:"role,omitempty"`
@@ -46,6 +55,7 @@ type EventData struct {
 	ToolInput          map[string]interface{} `json:"toolInput,omitempty"`
 	FileModification   *FileModification      `json:"fileModification,omitempty"`
 	ToolOutput         *string                `json:"toolOutput,omitempty"`
+	Images             []Image                `json:"images,omitempty"`
 	IsError            *bool                  `json:"isError,omitempty"`
 	IsRateLimit        *bool                  `json:"isRateLimit,omitempty"`
 	RateLimitResetAt   *int64                 `json:"rateLimitResetAt,omitempty"`

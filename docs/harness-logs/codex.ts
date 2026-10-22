@@ -493,13 +493,16 @@ export interface ICodexEventMsgRecord {
 // Raw Response Item Payloads (`type: "response_item"`)
 // ----------------------------------------------------------------------------
 
+export interface ICodexRawMessageTextItem {
+  readonly type: "input_text" | "output_text" | "text";
+  readonly text: string;
+}
+
 export interface ICodexRawMessagePayload {
   readonly type: "message";
   readonly role: "user" | "assistant" | "developer" | "system";
-  readonly content: readonly {
-    readonly type: "input_text" | "output_text" | "text";
-    readonly text: string;
-  }[];
+  /** User messages carry attached images as `input_image` items after their text. */
+  readonly content: readonly (ICodexRawMessageTextItem | CodexToolOutputImageItem)[];
 }
 
 export interface ICodexFunctionCallPayload {

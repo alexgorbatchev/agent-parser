@@ -12,7 +12,7 @@ import (
 )
 
 type rawPiContentBlock struct {
-	Type             string                 `json:"type"` // "text" | "thinking" | "toolCall" | "tool_call" | "toolResult" | "tool_result"
+	Type             string                 `json:"type"` // "text" | "thinking" | "toolCall" | "tool_call" | "toolResult" | "tool_result" | "image"
 	Text             string                 `json:"text,omitempty"`
 	Thinking         string                 `json:"thinking,omitempty"`
 	ToolName         string                 `json:"toolName,omitempty"`
@@ -27,6 +27,8 @@ type rawPiContentBlock struct {
 	Content          interface{}            `json:"content,omitempty"`
 	IsError          *bool                  `json:"isError,omitempty"`
 	IsErrorSnake     *bool                  `json:"is_error,omitempty"`
+	Data             string                 `json:"data,omitempty"`
+	MimeType         string                 `json:"mimeType,omitempty"`
 }
 
 type rawPiCostBreakdown struct {
@@ -268,6 +270,7 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 					Role:       stringPtr("user"),
 					Content:    stringPtr(fullPrompt),
 					LastPrompt: stringPtr(fullPrompt),
+					Images:     piImages(blocks),
 				},
 			})
 
@@ -307,6 +310,7 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 					ToolCallID: toolCallID,
 					ToolOutput: stringPtr(output),
 					IsError:    boolPtr(isErr),
+					Images:     piImages(parsePiContentBlocks(msg.Content)),
 				},
 			})
 

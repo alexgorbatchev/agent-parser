@@ -32,7 +32,7 @@ type liveUsage struct {
 
 func (u liveUsage) normalized() *TokenUsage {
 	return &TokenUsage{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead + u.Cached,
-		CacheWrite: u.CacheWrite, Total: u.Input + u.Output}
+		CacheWrite: u.CacheWrite, Total: u.Input + u.Output + u.CacheRead + u.CacheWrite}
 }
 
 type liveRecord struct {

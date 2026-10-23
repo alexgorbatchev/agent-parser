@@ -49,6 +49,13 @@ func TestLiveStreams(t *testing.T) {
 				t.Fatalf("result=%+v done=%v count=%d", r, done, count)
 			}
 			if r.Usage != nil {
+				wantTotal := int64(12)
+				if tt.harness == "claude" {
+					wantTotal = 15
+				}
+				if r.Usage.Total != wantTotal {
+					t.Fatalf("total=%d want=%d", r.Usage.Total, wantTotal)
+				}
 				if r.Usage.Input != 10 || r.Usage.CacheRead != 3 {
 					t.Fatalf("usage %+v", r.Usage)
 				}

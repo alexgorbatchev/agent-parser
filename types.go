@@ -1,5 +1,7 @@
 package parser
 
+import "encoding/json"
+
 // DiffLine represents a single line inside a unified diff hunk.
 type DiffLine struct {
 	Type          string `json:"type"` // "add" | "del" | "ctx"
@@ -34,6 +36,9 @@ type TokenUsage struct {
 
 // EventData holds the normalized payload for a parsed agent event.
 type EventData struct {
+	Delta              *string                `json:"delta,omitempty"`
+	Result             *LiveResult            `json:"result,omitempty"`
+	Native             json.RawMessage        `json:"native,omitempty"`
 	Role               *string                `json:"role,omitempty"`
 	Content            *string                `json:"content,omitempty"`
 	Title              *string                `json:"title,omitempty"`

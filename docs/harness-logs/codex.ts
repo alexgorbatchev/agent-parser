@@ -694,3 +694,29 @@ export function extractCodexTitleFromPrompt(promptText: string): string | null {
   const firstLine = trimmed.split("\n")[0] ?? trimmed;
   return firstLine.slice(0, 100);
 }
+
+/** Live `codex exec --json` protocol, distinct from persisted rollout records. */
+export interface ICodexExecUsage {
+  input_tokens: number;
+  cached_input_tokens?: number;
+  output_tokens: number;
+}
+export interface ICodexExecItem {
+  id: string;
+  type: string;
+  text?: string;
+  delta?: string;
+  exit_code?: number | null;
+  aggregated_output?: string;
+  [key: string]: unknown;
+}
+export interface ICodexExecRecord {
+  type: "thread.started" | "turn.started" | "turn.completed" | "turn.failed" |
+    "item.started" | "item.updated" | "item.completed" | "error";
+  thread_id?: string;
+  item?: ICodexExecItem;
+  usage?: ICodexExecUsage;
+  error?: string | ICodexExecError;
+  message?: string;
+}
+export interface ICodexExecError { message: string; }

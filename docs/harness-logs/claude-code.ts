@@ -1206,3 +1206,40 @@ export function isClaudeToolResultBlock(
 ): block is IClaudeToolResultBlock {
   return block.type === "tool_result";
 }
+
+/** Live print/stream-json protocol. Results are run snapshots, not usage deltas. */
+export interface IClaudePrintUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+export interface IClaudePrintDelta {
+  type: string;
+  text?: string;
+  thinking?: string;
+  partial_json?: string;
+}
+export interface IClaudePrintStreamEvent {
+  type: string;
+  delta?: IClaudePrintDelta;
+  message?: IClaudePrintMessage;
+}
+export interface IClaudePrintMessage {
+  model?: string;
+  content?: unknown;
+}
+export interface IClaudePrintRecord {
+  type: "system" | "assistant" | "user" | "stream_event" | "result";
+  subtype?: string;
+  session_id?: string;
+  parent_tool_use_id?: string | null;
+  model?: string;
+  message?: IClaudePrintMessage;
+  event?: IClaudePrintStreamEvent;
+  result?: string;
+  structured_output?: unknown;
+  usage?: IClaudePrintUsage;
+  is_error?: boolean;
+  errors?: string[];
+}

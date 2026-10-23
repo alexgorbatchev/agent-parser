@@ -12,6 +12,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 - Format Go source: `just fmt`
 
 ## Key gotchas
+- **Live harness output:** `NewLiveParser` decodes Codex exec JSONL and Claude print/stream JSON directly. Preserve deltas separately from complete message snapshots, native terminal results, structured output, and reported run usage. A native result is not proof that its subprocess exited successfully; the caller owns exit status and validation.
 - **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex completed `AgentMessage` items emit conversational `agent_message` or `question_prompt` when structured questions are present; preserve question tool arguments and call IDs.
 
 - **Faithful parsing**: Parsers decode logs faithfully without external model catalog lookups or synthetic metrics (such as context window fullness calculations); downstream consumers handle catalog enrichment.

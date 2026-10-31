@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/ncruces/go-sqlite3/driver"
+	_ "modernc.org/sqlite"
 )
 
 // DefaultOpencodeDBPath is the standard relative path to the OpenCode SQLite database within $HOME.
@@ -204,7 +204,7 @@ func OpenOpencodeDB(dbPath string) (*OpencodeDB, error) {
 		dsn = "file:" + dbPath + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)"
 	}
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening opencode database %q: %w", dbPath, err)
 	}

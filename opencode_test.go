@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
-	_ "github.com/ncruces/go-sqlite3/driver"
+	_ "modernc.org/sqlite"
 )
 
 func TestParseOpencodeModel(t *testing.T) {
@@ -163,7 +165,7 @@ func TestParseOpencodePartData(t *testing.T) {
 }
 
 func setupTestOpencodeDB(t *testing.T) *OpencodeDB {
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
 	if err != nil {
 		t.Fatalf("opening in-memory sqlite: %v", err)
 	}
@@ -2008,3 +2010,107 @@ func TestIsOpencodeMessageAborted(t *testing.T) {
 
 
 
+
+func createOpencodeWALFile(t *testing.T) (string, *sql.DB) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	writer, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := writer.Exec(`CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	return path, writer
+}
+
+func TestOpenOpencodeDBRejectsWrites(t *testing.T) {
+	path, writer := createOpencodeWALFile(t)
+	if _, err := writer.Exec(`INSERT INTO message VALUES ('a', 'x')`); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenOpencodeDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var count int
+	if err := reader.DB().QueryRow(`SELECT count(*) FROM message`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if _, err := reader.DB().Exec(`INSERT INTO message VALUES ('b', 'y')`); err == nil {
+		t.Fatal("read-only handle accepted a write")
+	}
+}
+
+func TestOpenOpencodeDBReadsWhileOpencodeWrites(t *testing.T) {
+	path, writer := createOpencodeWALFile(t)
+	reader, err := OpenOpencodeDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	const rows = 500
+	done := make(chan error, 1)
+	go func() {
+		for i := range rows {
+			if _, err := writer.Exec(`INSERT INTO message VALUES (?, 'x')`, fmt.Sprint(i)); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	last := 0
+	for {
+		var count int
+		if err := reader.DB().QueryRow(`SELECT count(*) FROM message`).Scan(&count); err != nil {
+			t.Fatalf("reading during writes: %v", err)
+		}
+		if count < last {
+			t.Fatalf("count went backwards: %d after %d", count, last)
+		}
+		last = count
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("writer failed beside the reader: %v", err)
+			}
+			if err := reader.DB().QueryRow(`SELECT count(*) FROM message`).Scan(&last); err != nil {
+				t.Fatal(err)
+			}
+			if last != rows {
+				t.Fatalf("count = %d, want %d", last, rows)
+			}
+			return
+		default:
+		}
+	}
+}
+
+func TestOpenOpencodeDBInMemory(t *testing.T) {
+	db, err := OpenOpencodeDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var one int
+	if err := db.DB().QueryRow(`SELECT 1`).Scan(&one); err != nil {
+		t.Fatal(err)
+	}
+	if one != 1 {
+		t.Fatalf("SELECT 1 = %d", one)
+	}
+}

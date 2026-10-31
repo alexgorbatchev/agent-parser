@@ -16,7 +16,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 
 - **Images**: Prompt and tool-result images go in `EventData.Images`; text fields keep only text. Codex tool outputs are the exception: `ToolOutput` keeps the raw content array, image data included, so media and unknown blocks are not lost.
 - **Faithful parsing**: Parsers decode logs faithfully without external model catalog lookups or synthetic metrics (such as context window fullness calculations); downstream consumers handle catalog enrichment.
-- **Pure Go SQLite**: OpenCode SQLite reading uses `github.com/ncruces/go-sqlite3` (WebAssembly-backed pure Go). No CGo or local SQLite C libraries are required.
+- **Pure Go SQLite**: OpenCode SQLite reading uses `modernc.org/sqlite`, registered in `opencode.go` and used through `database/sql` as driver `sqlite`. It needs no CGo or local SQLite C libraries, so consumers can cross-compile with `CGO_ENABLED=0`.
 - **Read-only DB access**: OpenCode database handles must strictly be opened in read-only mode (`?mode=ro`) to prevent write locks or interfering with running agents.
 - **Claude Code multi-block deduplication**: Claude Code streams assistant content across separate lines sharing the same `requestId`. Parsers must deduplicate usage to avoid multiplying token metrics.
 - **Schema sync contract**: All Go types and parsing logic must match the canonical TypeScript definitions in `docs/harness-logs/` (`claude-code.ts`, `pi.ts`, `codex.ts`, `opencode.ts`).

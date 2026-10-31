@@ -1798,7 +1798,7 @@ func TestRequestDedup_FIFOOrderAndEviction(t *testing.T) {
 		if nilDedup.has("any") {
 			t.Error("nil requestDedup should report false for has")
 		}
-		nilDedup.record("any") // must not panic
+		nilDedup.record("any")             // must not panic
 		recordSeenRequest(nilDedup, "any") // must not panic
 
 		d := newRequestDedup()
@@ -1975,5 +1975,92 @@ func TestClaudeCodeParser_ThinkingOnlyTerminalStopReasons(t *testing.T) {
 	})
 }
 
+func TestClaudeCodeParser_DeliveryEvidence(t *testing.T) {
+	const session = `"sessionId":"s","timestamp":"2026-10-25T14:49:47.482Z"`
+	tests := []struct {
+		name       string
+		line       string
+		eventType  string
+		wantUUID   string
+		wantMerged []string
+		wantText   string
+		wantNone   bool
+	}{
+		{
+			name:      "normal turn",
+			line:      `{"type":"user","uuid":"sent",` + session + `,"message":{"role":"user","content":"hello"}}`,
+			eventType: "turn_start",
+			wantUUID:  "sent",
+			wantText:  "hello",
+		},
+		{
+			name:       "merged queued messages",
+			line:       `{"type":"user","uuid":"last","mergedSendUuids":["first","second"],` + session + `,"message":{"role":"user","content":"a\nb\nc"}}`,
+			eventType:  "turn_start",
+			wantUUID:   "last",
+			wantMerged: []string{"first", "second"},
+			wantText:   "a\nb\nc",
+		},
+		{
+			name:      "absorbed mid-turn",
+			line:      `{"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","commandUuid":"absorbed","deliveryId":"d",` + session + `,"content":"git pull"}`,
+			eventType: "message_absorbed",
+			wantUUID:  "absorbed",
+			wantText:  "git pull",
+		},
+		{
+			name:     "delivered without a UUID",
+			line:     `{"type":"queue-operation","operation":"remove","reason":"delivered_to_agent",` + session + `,"content":"x"}`,
+			wantNone: true,
+		},
+		{
+			name:     "enqueue proves nothing",
+			line:     `{"type":"queue-operation","operation":"enqueue",` + session + `,"content":"x"}`,
+			wantNone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := NewClaudeCodeParser().ParseLine([]byte(tt.line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var found *ParsedEvent
+			for i := range events {
+				if events[i].Data.MessageUUID != nil {
+					found = &events[i]
+				}
+			}
+			if tt.wantNone {
+				if found != nil {
+					t.Fatalf("unexpected evidence: %+v", found)
+				}
+				return
+			}
+			if found == nil {
+				t.Fatalf("no evidence in %+v", events)
+			}
+			if found.EventType != tt.eventType || *found.Data.MessageUUID != tt.wantUUID {
+				t.Fatalf("event = %s %s", found.EventType, *found.Data.MessageUUID)
+			}
+			if !reflect.DeepEqual(found.Data.MergedMessageUUIDs, tt.wantMerged) {
+				t.Fatalf("merged = %v, want %v", found.Data.MergedMessageUUIDs, tt.wantMerged)
+			}
+			if found.Data.Content == nil || *found.Data.Content != tt.wantText {
+				t.Fatalf("content = %v", found.Data.Content)
+			}
+		})
+	}
+}
 
-
+func TestClaudeCodeParser_MissingUUIDStaysUnset(t *testing.T) {
+	events, err := NewClaudeCodeParser().ParseLine([]byte(`{"type":"user","message":{"role":"user","content":"hello"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.EventType == "turn_start" && event.Data.MessageUUID != nil {
+			t.Fatalf("message UUID = %q, want unset", *event.Data.MessageUUID)
+		}
+	}
+}

@@ -891,6 +891,8 @@ export interface IClaudeUserRecord extends IClaudeConversationalBase {
   permissionMode?: string;
   /** Active user prompt ID */
   promptId?: string;
+  /** Sender UUIDs of the other queued messages merged into this turn; `uuid` holds the last. */
+  mergedSendUuids?: string[];
 }
 
 /**
@@ -1002,6 +1004,12 @@ export interface IClaudeQueueOperationRecord {
   sessionId: string;
   timestamp: string;
   content?: string;
+  /** Why a `remove` happened, such as `absorbed_mid_turn` or `delivered_to_agent`. */
+  reason?: string;
+  /** UUID of the message a `remove` with reason `absorbed_mid_turn` consumed. */
+  commandUuid?: string;
+  /** Delivery attempt of that message. */
+  deliveryId?: string;
 }
 
 /**

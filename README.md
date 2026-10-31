@@ -13,7 +13,7 @@
 
 # How It Works
 
-Consumers feed raw log lines or database handles into the appropriate parser instance. As records are processed, `agent-parser` returns a slice of `ParsedEvent` structs containing standardized event types (`run_started`, `turn_start`, `tool_call`, `tool_result`, `turn_end`, `error`, `thinking`).
+Consumers feed raw log lines or database handles into the appropriate parser instance. As records are processed, `agent-parser` returns a slice of `ParsedEvent` structs containing standardized event types (`run_started`, `turn_start`, `tool_call`, `tool_result`, `turn_end`, `error`, `thinking`, `message_absorbed`).
 
 When tool calls perform file edits or patches, `agent-parser` parses the parameters into unified diffs (`DiffHunk` and `DiffLine`), providing downstream consumers with consistent change sets regardless of the originating tool or harness format.
 

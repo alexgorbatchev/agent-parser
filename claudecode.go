@@ -77,6 +77,10 @@ type rawJSONLine struct {
 	IsAPIErrorMessage   bool        `json:"isApiErrorMessage,omitempty"`
 	RequestID           string      `json:"requestId,omitempty"`
 	APIBlockIndex       *int        `json:"apiBlockIndex,omitempty"`
+	MergedSendUUIDs     []string    `json:"mergedSendUuids,omitempty"`
+	Operation           string      `json:"operation,omitempty"`
+	Reason              string      `json:"reason,omitempty"`
+	CommandUUID         string      `json:"commandUuid,omitempty"`
 }
 
 func parseTimestamp(v interface{}) int64 {
@@ -102,6 +106,13 @@ func parseTimestamp(v interface{}) int64 {
 		}
 	}
 	return time.Now().UnixMilli()
+}
+
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func stringPtr(s string) *string {
@@ -590,14 +601,37 @@ func parseClaudeCodeLineEvents(
 					CWD:       raw.CWD,
 					GitBranch: raw.GitBranch,
 					Data: EventData{
-						Role:       stringPtr("user"),
-						Content:    stringPtr(fullPrompt),
-						LastPrompt: stringPtr(fullPrompt),
-						Title:      titlePtr,
-						Images:     images,
+						Role:               stringPtr("user"),
+						Content:            stringPtr(fullPrompt),
+						LastPrompt:         stringPtr(fullPrompt),
+						Title:              titlePtr,
+						Images:             images,
+						MessageUUID:        optionalString(raw.UUID),
+						MergedMessageUUIDs: raw.MergedSendUUIDs,
 					},
 				})
 			}
+		}
+
+	case "queue-operation":
+		// A message absorbed mid-turn leaves no user record, so this is the only
+		// evidence that it reached the agent.
+		if raw.Operation == "remove" && raw.Reason == "absorbed_mid_turn" && raw.CommandUUID != "" {
+			var content *string
+			if text, ok := raw.Content.(string); ok {
+				content = stringPtr(text)
+			}
+			events = append(events, ParsedEvent{
+				EventType: "message_absorbed",
+				Timestamp: ts,
+				CWD:       raw.CWD,
+				GitBranch: raw.GitBranch,
+				Data: EventData{
+					Role:        stringPtr("user"),
+					Content:     content,
+					MessageUUID: stringPtr(raw.CommandUUID),
+				},
+			})
 		}
 
 	case "assistant":

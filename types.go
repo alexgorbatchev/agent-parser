@@ -65,6 +65,11 @@ type EventData struct {
 	StopReason         *string                `json:"stopReason,omitempty"`
 	Usage              *TokenUsage            `json:"usage,omitempty"`
 	RawHarnessCost     *float64               `json:"rawHarnessCost,omitempty"`
+	// MessageUUID is the UUID a sender gave a Claude Code message. It is set on
+	// turn_start and on message_absorbed.
+	MessageUUID *string `json:"messageUuid,omitempty"`
+	// MergedMessageUUIDs lists the other messages Claude Code merged into this turn.
+	MergedMessageUUIDs []string `json:"mergedMessageUuids,omitempty"`
 }
 
 // ParsedEvent represents a single normalized event emitted by a harness parser.

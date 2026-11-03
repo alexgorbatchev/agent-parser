@@ -225,8 +225,7 @@ func setupTestOpencodeDB(t *testing.T) *OpencodeDB {
 		t.Fatalf("opening in-memory sqlite: %v", err)
 	}
 
-	schema := opencodeTestSchema
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(opencodeTestSchema); err != nil {
 		_ = db.Close()
 		t.Fatalf("creating test schema: %v", err)
 	}

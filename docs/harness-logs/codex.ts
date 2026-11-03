@@ -27,6 +27,9 @@ export const DEFAULT_CODEX_SESSION_ROOT = ".codex/sessions";
  *
  * 1. Rollout Files (Date-Partitioned JSONL):
  *    `~/.codex/sessions/YYYY/MM/DD/rollout-<ISO8601>-<uuid>.jsonl`
+ *    Codex zstd-compresses older rollouts in place as `rollout-<ISO8601>-<uuid>.jsonl.zst`, and moves
+ *    archived sessions to `~/.codex/archived_sessions/rollout-<ISO8601>-<uuid>.jsonl[.zst]` (flat, not
+ *    date-partitioned). `$CODEX_HOME` relocates `~/.codex`.
  *    Where `<ISO8601>` replaces colons (`:`) with hyphens (`-`), e.g. `2026-06-12T16-08-36`
  *    and `<uuid>` is a time-ordered UUIDv7 identifying the session.
  *    @see https://github.com/neochoon/agenthud/blob/main/docs/schemas/codex-session.md#L8-L25

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func isolateHarnessEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"CLAUDE_CONFIG_DIR", "CODEX_HOME", "CODEX_SESSIONS_DIR", "PI_CODING_AGENT_DIR",
-		"PI_SESSIONS_DIR", "OPENCODE_DB_PATH", "XDG_DATA_HOME",
+		"PI_SESSIONS_DIR", "OPENCODE_DB_PATH", "OPENCODE_DB", "XDG_DATA_HOME",
 	} {
 		t.Setenv(key, "")
 	}
@@ -302,4 +303,162 @@ func TestOpenTranscriptErrors(t *testing.T) {
 	if _, err := io.ReadAll(reader); err == nil {
 		t.Error("expected an error reading a corrupt zstd transcript")
 	}
+}
+
+func TestDiscoverClaudeCodeSubagentLayouts(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	projects := filepath.Join(home, ".claude/projects/-repo")
+	writeFixture(t, filepath.Join(projects, "sess-1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(projects, "sess-1/subagents/workflows/wf_1/agent-w1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(projects, "sess-1/subagents/workflows/wf_1/journal.jsonl"), `{"type":"launched"}`+"\n")
+	writeFixture(t, filepath.Join(projects, "sess-1/tool-results/output.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(projects, "agent-legacy.jsonl"), "{}\n")
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessClaudeCode}})
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	got := map[string]SessionSource{}
+	for _, source := range sources {
+		got[source.SessionID] = source
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %+v, want the session, the workflow subagent, and the legacy subagent", sources)
+	}
+	if s := got["sess-1"]; s.Subagent {
+		t.Errorf("session marked as subagent: %+v", s)
+	}
+	if s := got["agent-w1"]; !s.Subagent || s.ParentSessionID != "sess-1" {
+		t.Errorf("workflow subagent = %+v, want a subagent of sess-1", s)
+	}
+	if s := got["agent-legacy"]; !s.Subagent || s.ParentSessionID != "" {
+		t.Errorf("legacy subagent = %+v, want a subagent without a known parent", s)
+	}
+}
+
+func TestDiscoverPiSubagentRuns(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	cwd := filepath.Join(home, ".pi/agent/sessions/--repo--")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1/run-uuid/run-0/session.jsonl"),
+		`{"type":"session","version":3,"id":"child-run-1","cwd":"/repo"}`+"\n")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1/notes/extra.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(cwd, "untimestamped.jsonl"), "{}\n")
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessPi}})
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("got %+v, want the session and its subagent run", sources)
+	}
+	run := sources[1]
+	if sources[0].SessionID != "parent-1" || run.SessionID != "child-run-1" || run.ParentSessionID != "parent-1" || !run.Subagent {
+		t.Errorf("sources = %+v", sources)
+	}
+}
+
+func TestDiscoverPiSubagentRunWithoutHeaderIsReported(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	cwd := filepath.Join(home, ".pi/agent/sessions/--repo--")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1/run-a/run-0/session.jsonl"), `{"type":"message"}`+"\n")
+	writeFixture(t, filepath.Join(cwd, "2026-09-22T17-47-27-324Z_parent-1/run-b/run-0/session.jsonl"), "not json")
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessPi}})
+	if err == nil || !strings.Contains(err.Error(), "session header") {
+		t.Fatalf("err = %v, want session header errors", err)
+	}
+	if len(sources) != 1 || sources[0].SessionID != "parent-1" {
+		t.Errorf("sources = %+v, want only the parent session", sources)
+	}
+}
+
+func TestDiscoverSessionsFollowsSymlinkedRoot(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	target := t.TempDir()
+	writeFixture(t, filepath.Join(target, "--repo--/2026-11-03T10-00-00-000Z_linked.jsonl"), "{}\n")
+	if err := os.MkdirAll(filepath.Join(home, ".pi/agent"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, ".pi/agent/sessions")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessPi}})
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	want := filepath.Join(home, ".pi/agent/sessions/--repo--/2026-11-03T10-00-00-000Z_linked.jsonl")
+	if len(sources) != 1 || sources[0].SessionID != "linked" || sources[0].Path != want {
+		t.Errorf("sources = %+v, want one session at %s", sources, want)
+	}
+}
+
+func TestDiscoverOpencodeDatabaseSelection(t *testing.T) {
+	dbPaths := func(t *testing.T, home string) []string {
+		t.Helper()
+		sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessOpencode}})
+		if err != nil {
+			t.Fatalf("DiscoverSessions: %v", err)
+		}
+		seen := map[string]bool{}
+		var paths []string
+		for _, source := range sources {
+			if !seen[source.Path] {
+				seen[source.Path] = true
+				paths = append(paths, source.Path)
+			}
+		}
+		return paths
+	}
+	newHome := func(t *testing.T) (string, string) {
+		home := t.TempDir()
+		dataDir := filepath.Join(home, ".local/share/opencode")
+		createOpencodeFixtureDB(t, filepath.Join(dataDir, "opencode.db"))
+		createOpencodeFixtureDB(t, filepath.Join(dataDir, "opencode-local.db"))
+		return home, dataDir
+	}
+
+	t.Run("default and channel databases", func(t *testing.T) {
+		isolateHarnessEnv(t)
+		t.Setenv("OPENCODE_DB", "")
+		home, dataDir := newHome(t)
+		got := dbPaths(t, home)
+		want := []string{filepath.Join(dataDir, "opencode-local.db"), filepath.Join(dataDir, "opencode.db")}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("databases = %v, want %v", got, want)
+		}
+	})
+	t.Run("relative OPENCODE_DB resolves in the data directory", func(t *testing.T) {
+		isolateHarnessEnv(t)
+		home, dataDir := newHome(t)
+		createOpencodeFixtureDB(t, filepath.Join(dataDir, "custom.db"))
+		t.Setenv("OPENCODE_DB", "custom.db")
+		if got := dbPaths(t, home); !reflect.DeepEqual(got, []string{filepath.Join(dataDir, "custom.db")}) {
+			t.Errorf("databases = %v", got)
+		}
+	})
+	t.Run("absolute OPENCODE_DB", func(t *testing.T) {
+		isolateHarnessEnv(t)
+		home, _ := newHome(t)
+		elsewhere := filepath.Join(t.TempDir(), "oc.db")
+		createOpencodeFixtureDB(t, elsewhere)
+		t.Setenv("OPENCODE_DB", elsewhere)
+		if got := dbPaths(t, home); !reflect.DeepEqual(got, []string{elsewhere}) {
+			t.Errorf("databases = %v", got)
+		}
+	})
+	t.Run("in-memory OPENCODE_DB has nothing on disk", func(t *testing.T) {
+		isolateHarnessEnv(t)
+		home, _ := newHome(t)
+		t.Setenv("OPENCODE_DB", ":memory:")
+		if got := dbPaths(t, home); len(got) != 0 {
+			t.Errorf("databases = %v, want none", got)
+		}
+	})
 }

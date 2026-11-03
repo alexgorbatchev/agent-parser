@@ -32,6 +32,16 @@ export const CURRENT_SESSION_VERSION = 3;
 export const DEFAULT_PI_SESSION_ROOT = ".pi/agent/sessions";
 
 /**
+ * On-disk layout under the sessions directory (`$PI_SESSIONS_DIR`, `$PI_CODING_AGENT_DIR/sessions`,
+ * or `~/.pi/agent/sessions`), where `<cwd>` is the encoded working directory:
+ *
+ * - Session: `<cwd>/<timestamp>_<sessionId>.jsonl`
+ * - Fork: `<cwd>/<timestamp>_<parentId>/forks/<timestamp>_<forkId>.jsonl`; a fork replays its parent's
+ *   history before its own entries.
+ * - Subagent run: `<cwd>/<timestamp>_<parentId>/<runUuid>/run-<n>/session.jsonl`; the file name carries
+ *   no ID, so the session ID comes from the first record, an `IPiSessionHeader` (`type: "session"`).
+ */
+/**
  * Encodes a working directory into Pi's directory name format.
  *
  * Encoding specification:

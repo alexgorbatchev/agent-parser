@@ -42,6 +42,8 @@
  *
  * 4. Subagent Transcripts:
  *    - New layout: `<projects-store>/<slug(cwd)>/<sessionId>/subagents/agent-<agentId>.jsonl`
+ *    - Workflow subagents: `<projects-store>/<slug(cwd)>/<sessionId>/subagents/workflows/<runId>/agent-<agentId>.jsonl`,
+ *      next to a `journal.jsonl` of workflow events (first record `{"type":"launched"}`) that is not a transcript.
  *    - Legacy layout: `<projects-store>/<slug(cwd)>/agent-<agentId>.jsonl` (filtered by sessionId)
  *    @see https://github.com/d1ll0n/parse-cc/blob/main/src/subagents.ts#L20-L80
  *

@@ -108,6 +108,39 @@ Metadata and unknown record types return `found=false`. Missing, null, or empty 
 
 Pi's nested message timestamp describes message creation, and Codex task payload timestamps describe lifecycle boundaries; neither overrides the outer record time. These functions read one record without changing parser state, scanning files, or substituting the current time. Callers choose traversal order and handle records without usable activity times.
 
+### Session Discovery
+
+| Export | Signature | Description |
+| :--- | :--- | :--- |
+| `DiscoverSessions` | `(ctx context.Context, opts DiscoverOptions) ([]SessionSource, error)` | Lists stored sessions for the selected harnesses, read-only |
+| `DiscoverOptions` | `struct { Harnesses []Harness; Home string }` | Empty `Harnesses` means every supported harness; empty `Home` means the user's home directory |
+| `SessionSource` | `struct` | `Harness`, `SessionID`, `ParentSessionID`, `Path`, `Subagent`, `Fork`, `Archived`, `ModTime` |
+| `Harness` | `string` | `HarnessClaudeCode`, `HarnessCodex`, `HarnessPi`, `HarnessOpencode` |
+| `SupportedHarnesses` | `() []Harness` | Returns a new slice of every supported harness |
+| `OpenTranscript` | `(path string) (io.ReadCloser, error)` | Opens a transcript, decompressing zstd `.jsonl.zst` files |
+
+```go
+sources, err := parser.DiscoverSessions(ctx, parser.DiscoverOptions{Harnesses: []parser.Harness{parser.HarnessCodex}})
+if err != nil {
+	log.Printf("some sessions could not be listed: %v", err) // sources still holds everything found
+}
+for _, source := range sources {
+	reader, err := parser.OpenTranscript(source.Path)
+	if err != nil {
+		continue
+	}
+	codex := parser.NewCodexParser()
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		events, _ := codex.ParseLine(scanner.Bytes())
+		_ = events
+	}
+	_ = reader.Close()
+}
+```
+
+Results are sorted by harness, path, and session ID. Missing locations are skipped silently. Unreadable directories, malformed Pi run headers, and unreadable OpenCode databases are joined into the returned error while every other session is still returned. Symlinked root directories are followed, and `Path` keeps the configured root. Discovery never parses transcript contents, except the first record of a Pi subagent run, which holds its session ID. OpenCode sources share one database `Path` per session row: read them with `OpenOpencodeDB` and `ReconstructSessionEvents`, not `OpenTranscript`.
+
 ### Core Types
 
 ```go
@@ -147,12 +180,12 @@ type TokenUsage struct {
 
 # Supported Harnesses
 
-| Harness | Log Format | Default Location |
-| :--- | :--- | :--- |
-| **Claude Code** | JSONL stream | `~/.claude/projects/<slug>/<sessionId>.jsonl` |
-| **Pi Coding Agent** | JSONL DAG tree | `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<id>.jsonl` |
-| **OpenAI Codex CLI** | Rollout JSONL | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` |
-| **OpenCode** | SQLite WAL database | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db` |
+| Harness | Log Format | Locations discovered by `DiscoverSessions` | Overrides |
+| :--- | :--- | :--- | :--- |
+| **Claude Code** | JSONL stream | `~/.claude/projects/<slug>/<sessionId>.jsonl`; subagents at `<slug>/<sessionId>/subagents/[workflows/<run>/]agent-<id>.jsonl` and legacy `<slug>/agent-<id>.jsonl` | `CLAUDE_CONFIG_DIR` (searched before `~/.claude`) |
+| **Pi Coding Agent** | JSONL DAG tree | `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<id>.jsonl`; forks at `<ts>_<parent>/forks/<ts>_<id>.jsonl`; subagent runs at `<ts>_<parent>/<run>/run-<n>/session.jsonl` | `PI_SESSIONS_DIR`, then `PI_CODING_AGENT_DIR/sessions` |
+| **OpenAI Codex CLI** | Rollout JSONL, plain or zstd `.jsonl.zst` | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl[.zst]` and `~/.codex/archived_sessions/rollout-*.jsonl[.zst]` | `CODEX_SESSIONS_DIR`, `CODEX_HOME` |
+| **OpenCode** | SQLite WAL database | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db` and channel `opencode-<channel>.db` | `OPENCODE_DB_PATH`, then OpenCode's `OPENCODE_DB` (absolute or relative to the data directory) |
 
 Canonical TypeScript definitions and schema quirks for all four harnesses are documented in [`docs/harness-logs/`](./docs/harness-logs/).
 

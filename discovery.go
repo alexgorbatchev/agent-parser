@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,22 +27,26 @@ const (
 	HarnessOpencode   Harness = "opencode"
 )
 
-// AllHarnesses lists every supported harness in a stable order.
-var AllHarnesses = []Harness{HarnessClaudeCode, HarnessCodex, HarnessPi, HarnessOpencode}
+// SupportedHarnesses returns every supported harness in a stable order.
+func SupportedHarnesses() []Harness {
+	return []Harness{HarnessClaudeCode, HarnessCodex, HarnessPi, HarnessOpencode}
+}
 
 // SessionSource is one session stored on disk. Discovery reads directory entries and
 // OpenCode's session table only; it never parses transcript contents.
 type SessionSource struct {
 	Harness Harness `json:"harness"`
 	// SessionID is the harness's session identifier. For a Claude Code subagent it is the
-	// subagent transcript's name, such as "agent-a1b2".
+	// subagent transcript's name, such as "agent-a1b2"; for a Pi subagent run it is the ID in
+	// the run's session header.
 	SessionID string `json:"sessionId"`
 	// ParentSessionID is the parent session of a subagent or fork, when the layout records it.
 	ParentSessionID string `json:"parentSessionId,omitempty"`
 	// Path is the transcript file, or the OpenCode database holding the session. Read
 	// transcripts with OpenTranscript, which decompresses .zst files.
 	Path string `json:"path"`
-	// Subagent marks a Claude Code subagent transcript or an OpenCode child session.
+	// Subagent marks a Claude Code subagent transcript, a Pi subagent run, or an OpenCode
+	// child session.
 	Subagent bool `json:"subagent,omitempty"`
 	// Fork marks a Pi fork transcript, which replays its parent's history before its own.
 	Fork bool `json:"fork,omitempty"`
@@ -53,7 +58,7 @@ type SessionSource struct {
 
 // DiscoverOptions selects what DiscoverSessions scans.
 type DiscoverOptions struct {
-	// Harnesses limits discovery; empty means AllHarnesses.
+	// Harnesses limits discovery; empty means SupportedHarnesses.
 	Harnesses []Harness
 	// Home replaces the user's home directory as the root of default locations.
 	Home string
@@ -62,16 +67,24 @@ type DiscoverOptions struct {
 // DiscoverSessions lists the sessions stored by each selected harness, read-only. It uses
 // the same locations and environment overrides as the harnesses themselves:
 //
-//   - Claude Code: $CLAUDE_CONFIG_DIR/projects and ~/.claude/projects, including subagents.
+//   - Claude Code: $CLAUDE_CONFIG_DIR/projects and ~/.claude/projects. Sessions are
+//     <project>/<session>.jsonl; subagents are agent-*.jsonl anywhere under
+//     <project>/<session>/subagents/ (including workflows/<run>/) or, in the legacy layout,
+//     directly under <project>/. Other files, such as workflow journal.jsonl, are skipped.
 //   - Codex: $CODEX_SESSIONS_DIR, or $CODEX_HOME/sessions, or ~/.codex/sessions, plus the
 //     sibling archived_sessions. Rollouts may be plain .jsonl or zstd-compressed .jsonl.zst.
 //   - Pi: $PI_SESSIONS_DIR, or $PI_CODING_AGENT_DIR/sessions, or ~/.pi/agent/sessions.
-//   - OpenCode: $OPENCODE_DB_PATH, or $XDG_DATA_HOME/opencode/opencode.db, or
-//     ~/.local/share/opencode/opencode.db, with one source per session row.
+//     Sessions are <cwd>/<ts>_<id>.jsonl, forks <cwd>/<ts>_<parent>/forks/<ts>_<id>.jsonl,
+//     and subagent runs <cwd>/<ts>_<parent>/<run>/run-<n>/session.jsonl, whose ID comes from
+//     the run's session header. Other files are skipped.
+//   - OpenCode: $OPENCODE_DB_PATH; otherwise OpenCode's own $OPENCODE_DB (absolute, or
+//     relative to the data directory), or every opencode.db and opencode-<channel>.db in
+//     ${XDG_DATA_HOME:-~/.local/share}/opencode, with one source per session row.
 //
-// Missing locations are skipped. Unreadable directories or databases do not stop the scan:
-// the sessions found are returned with the joined errors. Results are ordered by harness,
-// then path, then session ID.
+// Root directories may be symlinks; returned paths keep the configured root. Missing
+// locations are skipped. Unreadable directories, transcripts, or databases do not stop the
+// scan: the sessions found are returned with the joined errors. Results are ordered by
+// harness, then path, then session ID.
 func DiscoverSessions(ctx context.Context, opts DiscoverOptions) ([]SessionSource, error) {
 	home := opts.Home
 	if home == "" {
@@ -82,7 +95,7 @@ func DiscoverSessions(ctx context.Context, opts DiscoverOptions) ([]SessionSourc
 	}
 	harnesses := opts.Harnesses
 	if len(harnesses) == 0 {
-		harnesses = AllHarnesses
+		harnesses = SupportedHarnesses()
 	}
 
 	var sources []SessionSource
@@ -147,13 +160,19 @@ func (t *zstdTranscript) Close() error {
 }
 
 // walkTranscripts calls visit for each regular file under root whose name has one of the
-// suffixes. A missing root yields nothing; unreadable directories are reported and skipped.
-func walkTranscripts(ctx context.Context, root string, suffixes []string, visit func(path string, info fs.FileInfo)) error {
-	if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+// suffixes, with its path under the configured root and its parts relative to the root. A
+// symlinked root is followed. A missing root yields nothing; unreadable directories are
+// reported and skipped.
+func walkTranscripts(ctx context.Context, root string, suffixes []string, visit func(path string, rel []string, info fs.FileInfo) error) error {
+	resolved, err := filepath.EvalSymlinks(root)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
 	var errs []error
-	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(resolved, func(walked string, entry fs.DirEntry, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -172,7 +191,14 @@ func walkTranscripts(ctx context.Context, root string, suffixes []string, visit 
 			errs = append(errs, err)
 			return nil
 		}
-		visit(path, info)
+		relPath, err := filepath.Rel(resolved, walked)
+		if err != nil {
+			errs = append(errs, err)
+			return nil
+		}
+		if err := visit(filepath.Join(root, relPath), strings.Split(filepath.ToSlash(relPath), "/"), info); err != nil {
+			errs = append(errs, err)
+		}
 		return nil
 	})
 	if walkErr != nil {
@@ -217,25 +243,38 @@ func discoverClaudeCode(ctx context.Context, home string) ([]SessionSource, erro
 	var sources []SessionSource
 	var errs []error
 	for _, configDir := range uniqueDirs(configDirs) {
-		err := walkTranscripts(ctx, filepath.Join(configDir, "projects"), []string{".jsonl"}, func(path string, info fs.FileInfo) {
-			source := SessionSource{
-				Harness:   HarnessClaudeCode,
-				SessionID: strings.TrimSuffix(info.Name(), ".jsonl"),
-				Path:      path,
-				ModTime:   info.ModTime(),
+		err := walkTranscripts(ctx, filepath.Join(configDir, "projects"), []string{".jsonl"}, func(path string, rel []string, info fs.FileInfo) error {
+			if source, ok := claudeCodeSource(path, rel, info); ok {
+				sources = append(sources, source)
 			}
-			// Subagent transcripts live at projects/<project>/<session>/subagents/<agent>.jsonl.
-			if dir := filepath.Dir(path); filepath.Base(dir) == "subagents" {
-				source.Subagent = true
-				source.ParentSessionID = filepath.Base(filepath.Dir(dir))
-			}
-			sources = append(sources, source)
+			return nil
 		})
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return sources, errors.Join(errs...)
+}
+
+// claudeCodeSource classifies a .jsonl file by its position under the projects directory.
+// rel is [project, ...].
+func claudeCodeSource(path string, rel []string, info fs.FileInfo) (SessionSource, bool) {
+	name := strings.TrimSuffix(info.Name(), ".jsonl")
+	source := SessionSource{Harness: HarnessClaudeCode, SessionID: name, Path: path, ModTime: info.ModTime()}
+	isAgent := strings.HasPrefix(name, "agent-")
+	switch {
+	case len(rel) == 2:
+		// <project>/<session>.jsonl, or a legacy <project>/agent-<id>.jsonl subagent.
+		source.Subagent = isAgent
+		return source, true
+	case len(rel) >= 4 && rel[2] == "subagents" && isAgent:
+		// <project>/<session>/subagents/[workflows/<run>/]agent-<id>.jsonl
+		source.Subagent = true
+		source.ParentSessionID = rel[1]
+		return source, true
+	default:
+		return SessionSource{}, false
+	}
 }
 
 func discoverCodex(ctx context.Context, home string) ([]SessionSource, error) {
@@ -254,13 +293,13 @@ func discoverCodex(ctx context.Context, home string) ([]SessionSource, error) {
 		dir      string
 		archived bool
 	}{{sessionsDir, false}, {filepath.Join(codexHome, "archived_sessions"), true}} {
-		err := walkTranscripts(ctx, root.dir, []string{".jsonl", ".jsonl.zst"}, func(path string, info fs.FileInfo) {
+		err := walkTranscripts(ctx, root.dir, []string{".jsonl", ".jsonl.zst"}, func(path string, _ []string, info fs.FileInfo) error {
 			if !strings.HasPrefix(info.Name(), "rollout-") {
-				return
+				return nil
 			}
 			rollout, err := ParseCodexRolloutPath(strings.TrimSuffix(path, ".zst"))
 			if err != nil {
-				return
+				return nil
 			}
 			sources = append(sources, SessionSource{
 				Harness:   HarnessCodex,
@@ -269,6 +308,7 @@ func discoverCodex(ctx context.Context, home string) ([]SessionSource, error) {
 				Archived:  root.archived,
 				ModTime:   info.ModTime(),
 			})
+			return nil
 		})
 		if err != nil {
 			errs = append(errs, err)
@@ -287,36 +327,134 @@ func discoverPi(ctx context.Context, home string) ([]SessionSource, error) {
 	}
 
 	var sources []SessionSource
-	err := walkTranscripts(ctx, sessionsDir, []string{".jsonl"}, func(path string, info fs.FileInfo) {
-		// Pi names transcripts <timestamp>_<session-id>.jsonl.
-		name := strings.TrimSuffix(info.Name(), ".jsonl")
-		sessionID := name
-		if _, id, ok := strings.Cut(name, "_"); ok && id != "" {
-			sessionID = id
+	err := walkTranscripts(ctx, sessionsDir, []string{".jsonl"}, func(path string, rel []string, info fs.FileInfo) error {
+		source, ok, err := piSource(path, rel, info)
+		if ok {
+			sources = append(sources, source)
 		}
-		source := SessionSource{Harness: HarnessPi, SessionID: sessionID, Path: path, ModTime: info.ModTime()}
-		// Forks live at <cwd>/<timestamp>_<parent-id>/forks/<timestamp>_<fork-id>.jsonl.
-		if dir := filepath.Dir(path); filepath.Base(dir) == "forks" {
-			source.Fork = true
-			if _, parentID, ok := strings.Cut(filepath.Base(filepath.Dir(dir)), "_"); ok {
-				source.ParentSessionID = parentID
-			}
-		}
-		sources = append(sources, source)
+		return err
 	})
 	return sources, err
 }
 
+// piSource classifies a .jsonl file by its position under the sessions directory.
+// rel is [cwd, ...]; Pi names transcripts <timestamp>_<session-id>.jsonl.
+func piSource(path string, rel []string, info fs.FileInfo) (SessionSource, bool, error) {
+	source := SessionSource{Harness: HarnessPi, Path: path, ModTime: info.ModTime()}
+	switch {
+	case len(rel) == 2:
+		// <cwd>/<ts>_<id>.jsonl
+		id, ok := piIDFromName(rel[1])
+		source.SessionID = id
+		return source, ok, nil
+	case len(rel) == 4 && rel[2] == "forks":
+		// <cwd>/<ts>_<parent>/forks/<ts>_<id>.jsonl
+		id, ok := piIDFromName(rel[3])
+		parent, parentOK := piIDFromName(rel[1])
+		if !ok || !parentOK {
+			return SessionSource{}, false, nil
+		}
+		source.SessionID, source.ParentSessionID, source.Fork = id, parent, true
+		return source, true, nil
+	case len(rel) == 5 && strings.HasPrefix(rel[3], "run-") && rel[4] == "session.jsonl":
+		// <cwd>/<ts>_<parent>/<run>/run-<n>/session.jsonl: the ID lives in the session header.
+		parent, parentOK := piIDFromName(rel[1])
+		if !parentOK {
+			return SessionSource{}, false, nil
+		}
+		id, err := piHeaderSessionID(path)
+		if err != nil {
+			return SessionSource{}, false, err
+		}
+		source.SessionID, source.ParentSessionID, source.Subagent = id, parent, true
+		return source, true, nil
+	default:
+		return SessionSource{}, false, nil
+	}
+}
+
+// piIDFromName returns the session ID from a <timestamp>_<session-id>[.jsonl] name.
+func piIDFromName(name string) (string, bool) {
+	_, id, ok := strings.Cut(strings.TrimSuffix(name, ".jsonl"), "_")
+	return id, ok && id != ""
+}
+
+// piHeaderSessionID reads the session ID from the first record of a Pi transcript.
+func piHeaderSessionID(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("reading Pi session header: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	var header struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(file).Decode(&header); err != nil {
+		return "", fmt.Errorf("reading Pi session header %s: %w", path, err)
+	}
+	if header.Type != "session" || header.ID == "" {
+		return "", fmt.Errorf("pi transcript %s does not start with a session header", path)
+	}
+	return header.ID, nil
+}
+
 func discoverOpencode(ctx context.Context, home string) ([]SessionSource, error) {
-	dbPath := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+	paths, err := opencodeDBPaths(home)
+	if err != nil {
+		return nil, err
+	}
+	var sources []SessionSource
+	var errs []error
+	for _, dbPath := range paths {
+		found, err := opencodeDBSources(ctx, dbPath)
+		sources = append(sources, found...)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", dbPath, err))
+		}
+	}
+	return sources, errors.Join(errs...)
+}
+
+// opencodeDBPaths returns the OpenCode databases to read. OPENCODE_DB_PATH (agent-watcher's
+// override) wins. Otherwise OpenCode's own OPENCODE_DB names the database, resolved against
+// the data directory the way OpenCode resolves it; without it, every opencode.db and
+// channel opencode-<channel>.db in the data directory is read.
+func opencodeDBPaths(home string) ([]string, error) {
 	if custom := os.Getenv("OPENCODE_DB_PATH"); custom != "" {
-		dbPath = custom
-	} else if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
-		dbPath = filepath.Join(xdgData, "opencode", "opencode.db")
+		return existingFiles([]string{custom}), nil
 	}
-	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+	dataDir := filepath.Join(home, ".local", "share", "opencode")
+	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
+		dataDir = filepath.Join(xdgData, "opencode")
 	}
+	if name := os.Getenv("OPENCODE_DB"); name != "" {
+		if name == ":memory:" {
+			return nil, nil
+		}
+		if !filepath.IsAbs(name) {
+			name = filepath.Join(dataDir, name)
+		}
+		return existingFiles([]string{name}), nil
+	}
+	channels, err := filepath.Glob(filepath.Join(dataDir, "opencode-*.db"))
+	if err != nil {
+		return nil, err
+	}
+	return existingFiles(append([]string{filepath.Join(dataDir, "opencode.db")}, channels...)), nil
+}
+
+func existingFiles(paths []string) []string {
+	var existing []string
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			existing = append(existing, path)
+		}
+	}
+	return existing
+}
+
+func opencodeDBSources(ctx context.Context, dbPath string) ([]SessionSource, error) {
 	db, err := OpenOpencodeDB(dbPath)
 	if err != nil {
 		return nil, err

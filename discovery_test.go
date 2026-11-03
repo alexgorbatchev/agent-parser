@@ -79,7 +79,8 @@ func buildHarnessHome(t *testing.T) string {
 	writeZstdFixture(t, filepath.Join(home, ".codex/archived_sessions/rollout-2026-09-29T12-43-05-01a0eeb1-34c4-7f92-94c3-b9040da8692d.jsonl.zst"), "{}\n")
 	writeFixture(t, filepath.Join(home, ".codex/sessions/2026/11/03/history.jsonl"), "{}\n")
 	writeFixture(t, filepath.Join(home, ".pi/agent/sessions/--repo--/2026-09-20T03-02-11-996Z_01a0bcc3-parent.jsonl"), "{}\n")
-	writeFixture(t, filepath.Join(home, ".pi/agent/sessions/--repo--/2026-09-20T03-02-11-996Z_01a0bcc3-parent/forks/2026-09-20T03-09-01-836Z_01a0bcc9-fork.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(home, ".pi/agent/sessions/--repo--/2026-09-20T03-02-11-996Z_01a0bcc3-parent/forks/2026-09-20T03-09-01-836Z_01a0bcc9-fork.jsonl"),
+		`{"type":"session","version":3,"id":"01a0bcc9-fork","timestamp":"2026-09-20T03:09:01.836Z","cwd":"/repo"}`+"\n")
 	createOpencodeFixtureDB(t, filepath.Join(home, ".local/share/opencode/opencode.db"))
 	return home
 }
@@ -499,5 +500,111 @@ func TestDiscoverSessionsSortsPartialResultsOnCancel(t *testing.T) {
 	}
 	if !strings.HasSuffix(sources[0].Path, "opencode-local.db") {
 		t.Errorf("first source = %s, want the channel database first", sources[0].Path)
+	}
+}
+
+func TestDiscoverClaudeCodeForks(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude/projects/-repo")
+	spawn := func(id, at string) string {
+		return `{"type":"assistant","timestamp":"` + at + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"Agent","input":{}}]}}`
+	}
+	writeFixture(t, filepath.Join(project, "sess.jsonl"),
+		`{"type":"user","timestamp":"2026-11-03T22:00:00Z","message":{"role":"user","content":"go"}}`+"\n"+
+			spawn("toolu_session_spawn", "2026-11-03T22:10:00.5Z")+"\n")
+	subagents := filepath.Join(project, "sess/subagents")
+	// A fork the session spawned, which copies the session's history.
+	writeFixture(t, filepath.Join(subagents, "agent-f1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(subagents, "agent-f1.meta.json"), `{"agentType":"fork","isFork":true,"toolUseId":"toolu_session_spawn"}`)
+	// A fork another subagent spawned.
+	writeFixture(t, filepath.Join(subagents, "agent-p1.jsonl"), spawn("toolu_agent_spawn", "2026-11-03T22:20:00Z")+"\n")
+	writeFixture(t, filepath.Join(subagents, "agent-p1.meta.json"), `{"agentType":"general-purpose"}`)
+	writeFixture(t, filepath.Join(subagents, "agent-f2.jsonl"), `{"type":"fork-context-ref","agentId":"f2","parentSessionId":"sess"}`+"\n")
+	writeFixture(t, filepath.Join(subagents, "agent-f2.meta.json"), `{"agentType":"fork","isFork":true,"toolUseId":"toolu_agent_spawn","parentAgentId":"p1"}`)
+	// A plain subagent without a meta file.
+	writeFixture(t, filepath.Join(subagents, "agent-plain.jsonl"), "{}\n")
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessClaudeCode}})
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	got := map[string]SessionSource{}
+	for _, source := range sources {
+		got[source.SessionID] = source
+	}
+	if s := got["agent-f1"]; !s.Fork || !s.Subagent || !s.ForkedAt.Equal(time.Date(2026, 11, 3, 22, 10, 0, 500_000_000, time.UTC)) {
+		t.Errorf("session-spawned fork = %+v", s)
+	}
+	if s := got["agent-f2"]; !s.Fork || !s.ForkedAt.Equal(time.Date(2026, 11, 3, 22, 20, 0, 0, time.UTC)) {
+		t.Errorf("agent-spawned fork = %+v", s)
+	}
+	for _, id := range []string{"agent-p1", "agent-plain", "sess"} {
+		if s := got[id]; s.Fork || !s.ForkedAt.IsZero() {
+			t.Errorf("%s is not a fork: %+v", id, s)
+		}
+	}
+}
+
+func TestDiscoverClaudeCodeForkErrors(t *testing.T) {
+	tests := map[string]struct {
+		meta    string
+		session string
+		want    string
+	}{
+		"unknown spawning call": {`{"isFork":true,"toolUseId":"toolu_missing"}`, `{"type":"user"}`, "tool call toolu_missing not found"},
+		"no spawning call":      {`{"isFork":true}`, `{"type":"user"}`, "names no spawning tool call"},
+		"unreadable meta":       {`not json`, `{"type":"user"}`, "reading Claude Code subagent meta"},
+		"missing parent":        {`{"isFork":true,"toolUseId":"toolu_x","parentAgentId":"gone"}`, `{"type":"user"}`, "agent-gone.jsonl"},
+		"bad parent record":     {`{"isFork":true,"toolUseId":"toolu_x"}`, `{"id":"toolu_x", broken`, "reading"},
+		"bad timestamp":         {`{"isFork":true,"toolUseId":"toolu_x"}`, `{"timestamp":"later","message":{"content":[{"id":"toolu_x"}]}}`, "parsing time"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			isolateHarnessEnv(t)
+			home := t.TempDir()
+			project := filepath.Join(home, ".claude/projects/-repo")
+			writeFixture(t, filepath.Join(project, "sess.jsonl"), tt.session+"\n")
+			writeFixture(t, filepath.Join(project, "sess/subagents/agent-f.jsonl"), "{}\n")
+			writeFixture(t, filepath.Join(project, "sess/subagents/agent-f.meta.json"), tt.meta)
+
+			sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessClaudeCode}})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want it to mention %q", err, tt.want)
+			}
+			var fork *SessionSource
+			for i := range sources {
+				if sources[i].SessionID == "agent-f" {
+					fork = &sources[i]
+				}
+			}
+			if fork == nil || !fork.ForkedAt.IsZero() {
+				t.Errorf("the fork must still be listed without a fork time: %+v", sources)
+			}
+		})
+	}
+}
+
+func TestDiscoverPiForkTimes(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := t.TempDir()
+	forks := filepath.Join(home, ".pi/agent/sessions/--repo--/2026-09-20T03-02-11-996Z_parent/forks")
+	writeFixture(t, filepath.Join(forks, "2026-09-20T03-09-01-836Z_good.jsonl"),
+		`{"type":"session","version":3,"id":"good","timestamp":"2026-09-20T03:09:01.836Z"}`+"\n")
+	writeFixture(t, filepath.Join(forks, "2026-09-20T03-10-00-000Z_bad.jsonl"), `{"type":"message"}`+"\n")
+
+	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessPi}})
+	if err == nil || !strings.Contains(err.Error(), "session header") {
+		t.Fatalf("err = %v, want the bad fork header reported", err)
+	}
+	got := map[string]SessionSource{}
+	for _, source := range sources {
+		got[source.SessionID] = source
+	}
+	if s := got["good"]; !s.Fork || !s.ForkedAt.Equal(time.Date(2026, 9, 20, 3, 9, 1, 836_000_000, time.UTC)) {
+		t.Errorf("fork = %+v", s)
+	}
+	if s, ok := got["bad"]; !ok || !s.Fork || !s.ForkedAt.IsZero() {
+		t.Errorf("a fork with a bad header must still be listed without a fork time: %+v", s)
 	}
 }

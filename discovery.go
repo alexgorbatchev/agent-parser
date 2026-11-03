@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +21,10 @@ import (
 // Harness identifies an agent harness whose sessions this package parses.
 type Harness string
 
+// maxTranscriptLineBytes bounds one transcript line read during discovery; tool outputs
+// embedded in a line can be tens of megabytes.
+const maxTranscriptLineBytes = 256 << 20
+
 // Supported harnesses.
 const (
 	HarnessClaudeCode Harness = "claude-code"
@@ -33,8 +39,9 @@ func SupportedHarnesses() []Harness {
 }
 
 // SessionSource is one session stored on disk. Discovery reads directory entries, OpenCode's
-// session table, and the first record of each Pi subagent run, which holds the run's session
-// ID; it does not parse any other transcript contents.
+// session table, the first record of each Pi subagent run and fork, Claude Code subagent
+// .meta.json files, and, for a Claude Code fork, the parent record holding its spawning tool
+// call; it does not parse any other transcript contents.
 type SessionSource struct {
 	Harness Harness `json:"harness"`
 	// SessionID is the harness's session identifier. For a Claude Code subagent it is the
@@ -49,8 +56,13 @@ type SessionSource struct {
 	// Subagent marks a Claude Code subagent transcript, a Pi subagent run, or an OpenCode
 	// child session.
 	Subagent bool `json:"subagent,omitempty"`
-	// Fork marks a Pi fork transcript, which replays its parent's history before its own.
+	// Fork marks a Claude Code fork subagent or a Pi fork, whose transcript can replay its
+	// parent's history before its own entries.
 	Fork bool `json:"fork,omitempty"`
+	// ForkedAt is when a fork was created: the parent's spawning tool call for a Claude Code
+	// fork, and the session header for a Pi fork. Events before it are replayed parent
+	// history. It is zero when the session is not a fork or the time could not be read.
+	ForkedAt time.Time `json:"forkedAt,omitzero"`
 	// Archived marks a Codex rollout moved to archived_sessions.
 	Archived bool `json:"archived,omitempty"`
 	// ModTime is the transcript's modification time, or OpenCode's session update time.
@@ -249,11 +261,18 @@ func discoverClaudeCode(ctx context.Context, home string) ([]SessionSource, erro
 	var sources []SessionSource
 	var errs []error
 	for _, configDir := range uniqueDirs(configDirs) {
-		err := walkTranscripts(ctx, filepath.Join(configDir, "projects"), []string{".jsonl"}, func(path string, rel []string, info fs.FileInfo) error {
-			if source, ok := claudeCodeSource(path, rel, info); ok {
-				sources = append(sources, source)
+		projects := filepath.Join(configDir, "projects")
+		err := walkTranscripts(ctx, projects, []string{".jsonl"}, func(path string, rel []string, info fs.FileInfo) error {
+			source, ok := claudeCodeSource(path, rel, info)
+			if !ok {
+				return nil
 			}
-			return nil
+			var err error
+			if source.Subagent && len(rel) >= 4 {
+				err = markClaudeCodeFork(&source, filepath.Join(projects, rel[0], rel[1]+".jsonl"))
+			}
+			sources = append(sources, source)
+			return err
 		})
 		if err != nil {
 			errs = append(errs, err)
@@ -281,6 +300,78 @@ func claudeCodeSource(path string, rel []string, info fs.FileInfo) (SessionSourc
 	default:
 		return SessionSource{}, false
 	}
+}
+
+// claudeCodeForkMeta is the part of a subagent's agent-<id>.meta.json that identifies a fork.
+type claudeCodeForkMeta struct {
+	IsFork        bool   `json:"isFork"`
+	ToolUseID     string `json:"toolUseId"`
+	ParentAgentID string `json:"parentAgentId"`
+}
+
+// markClaudeCodeFork reads the subagent's meta file and, for a fork, sets Fork and
+// ForkedAt from the parent's tool call that spawned it. The parent is the subagent named
+// by parentAgentId in the same directory, or the session transcript. A subagent without a
+// meta file is not a fork.
+func markClaudeCodeFork(source *SessionSource, sessionTranscript string) error {
+	metaPath := strings.TrimSuffix(source.Path, ".jsonl") + ".meta.json"
+	data, err := os.ReadFile(metaPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading Claude Code subagent meta: %w", err)
+	}
+	var meta claudeCodeForkMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return fmt.Errorf("reading Claude Code subagent meta %s: %w", metaPath, err)
+	}
+	if !meta.IsFork {
+		return nil
+	}
+	source.Fork = true
+	parent := sessionTranscript
+	if meta.ParentAgentID != "" {
+		parent = filepath.Join(filepath.Dir(source.Path), "agent-"+meta.ParentAgentID+".jsonl")
+	}
+	forkedAt, err := toolCallTime(parent, meta.ToolUseID)
+	if err != nil {
+		return fmt.Errorf("finding when Claude Code fork %s was spawned: %w", source.Path, err)
+	}
+	source.ForkedAt = forkedAt
+	return nil
+}
+
+// toolCallTime returns the timestamp of the transcript record holding the tool call with
+// the given ID.
+func toolCallTime(transcript, toolUseID string) (time.Time, error) {
+	if toolUseID == "" {
+		return time.Time{}, errors.New("the fork names no spawning tool call")
+	}
+	file, err := os.Open(transcript)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = file.Close() }()
+	needle := []byte(`"id":"` + toolUseID + `"`)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1<<20), maxTranscriptLineBytes)
+	for scanner.Scan() {
+		if !bytes.Contains(scanner.Bytes(), needle) {
+			continue
+		}
+		var record struct {
+			Timestamp string `json:"timestamp"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return time.Time{}, fmt.Errorf("reading %s: %w", transcript, err)
+		}
+		return time.Parse(time.RFC3339Nano, record.Timestamp)
+	}
+	if err := scanner.Err(); err != nil {
+		return time.Time{}, fmt.Errorf("reading %s: %w", transcript, err)
+	}
+	return time.Time{}, fmt.Errorf("tool call %s not found in %s", toolUseID, transcript)
 }
 
 func discoverCodex(ctx context.Context, home string) ([]SessionSource, error) {
@@ -361,6 +452,11 @@ func piSource(path string, rel []string, info fs.FileInfo) (SessionSource, bool,
 			return SessionSource{}, false, nil
 		}
 		source.SessionID, source.ParentSessionID, source.Fork = id, parent, true
+		header, err := readPiHeader(path)
+		if err != nil {
+			return source, true, err
+		}
+		source.ForkedAt = header.Timestamp
 		return source, true, nil
 	case len(rel) == 5 && strings.HasPrefix(rel[3], "run-") && rel[4] == "session.jsonl":
 		// <cwd>/<ts>_<parent>/<run>/run-<n>/session.jsonl: the ID lives in the session header.
@@ -368,11 +464,11 @@ func piSource(path string, rel []string, info fs.FileInfo) (SessionSource, bool,
 		if !parentOK {
 			return SessionSource{}, false, nil
 		}
-		id, err := piHeaderSessionID(path)
+		header, err := readPiHeader(path)
 		if err != nil {
 			return SessionSource{}, false, err
 		}
-		source.SessionID, source.ParentSessionID, source.Subagent = id, parent, true
+		source.SessionID, source.ParentSessionID, source.Subagent = header.ID, parent, true
 		return source, true, nil
 	default:
 		return SessionSource{}, false, nil
@@ -385,24 +481,28 @@ func piIDFromName(name string) (string, bool) {
 	return id, ok && id != ""
 }
 
-// piHeaderSessionID reads the session ID from the first record of a Pi transcript.
-func piHeaderSessionID(path string) (string, error) {
+// readPiHeader reads the first record of a Pi transcript: its session ID and creation time.
+func readPiHeader(path string) (piHeader, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("reading Pi session header: %w", err)
+		return piHeader{}, fmt.Errorf("reading Pi session header: %w", err)
 	}
 	defer func() { _ = file.Close() }()
-	var header struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-	}
+	var header piHeader
 	if err := json.NewDecoder(file).Decode(&header); err != nil {
-		return "", fmt.Errorf("reading Pi session header %s: %w", path, err)
+		return piHeader{}, fmt.Errorf("reading Pi session header %s: %w", path, err)
 	}
 	if header.Type != "session" || header.ID == "" {
-		return "", fmt.Errorf("pi transcript %s does not start with a session header", path)
+		return piHeader{}, fmt.Errorf("pi transcript %s does not start with a session header", path)
 	}
-	return header.ID, nil
+	return header, nil
+}
+
+// piHeader is the first record of a Pi transcript.
+type piHeader struct {
+	Type      string    `json:"type"`
+	ID        string    `json:"id"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 func discoverOpencode(ctx context.Context, home string) ([]SessionSource, error) {

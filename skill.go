@@ -26,9 +26,10 @@ type SkillInvocation struct {
 
 const skillFileName = "SKILL.md"
 
-// skillFromFile returns the skill whose definition file is filePath. Only files named
-// SKILL.md directly inside a directory under a "skills" directory qualify, which is how
-// every supported harness lays out installed skills.
+// skillFromFile returns the skill whose definition file is filePath. It recognizes the
+// installed-skill layouts harnesses use: skills/<name>/SKILL.md, Codex system skills at
+// skills/.system/<name>/SKILL.md, and synced skills at skills/synced/<id>/<name>/SKILL.md.
+// Other nesting, such as registry sources at skills/user/<name>/SKILL.md, does not qualify.
 func skillFromFile(filePath, source string) (SkillInvocation, bool) {
 	clean := path.Clean(strings.ReplaceAll(filePath, "\\", "/"))
 	if path.Base(clean) != skillFileName {
@@ -36,16 +37,24 @@ func skillFromFile(filePath, source string) (SkillInvocation, bool) {
 	}
 	dir := path.Dir(clean)
 	name := path.Base(dir)
-	if path.Base(path.Dir(dir)) != "skills" || name == "." || name == "/" {
+	parent := path.Dir(dir)
+	grandparent := path.Dir(parent)
+	installed := path.Base(parent) == "skills" ||
+		(path.Base(parent) == ".system" && path.Base(grandparent) == "skills") ||
+		(path.Base(grandparent) == "synced" && path.Base(path.Dir(grandparent)) == "skills")
+	if !installed || name == "." || name == "/" {
 		return SkillInvocation{}, false
 	}
 	return SkillInvocation{Name: name, Source: source, Path: clean}, true
 }
 
-// shellReadCommands are commands that only read the files they are given.
+// shellReadCommands are commands that read the files they are given from the beginning.
+// tail is absent because it reads from the end, so it never starts a skill load.
 var shellReadCommands = map[string]bool{
-	"cat": true, "sed": true, "head": true, "tail": true, "nl": true, "bat": true, "less": true, "more": true,
+	"cat": true, "sed": true, "head": true, "nl": true, "bat": true, "less": true, "more": true,
 }
+
+var sedLineRange = regexp.MustCompile(`^(\d+)(,\d+)?p$`)
 
 var shellSeparator = regexp.MustCompile(`&&|\|\||[;|\n]`)
 
@@ -60,7 +69,7 @@ func skillsFromShellCommand(script string) []SkillInvocation {
 		if len(fields) == 0 || !shellReadCommands[path.Base(trimShellQuotes(fields[0]))] {
 			continue
 		}
-		if strings.ContainsAny(segment, "<>") || editsInPlace(fields) {
+		if strings.ContainsAny(segment, "<>") || editsInPlace(fields) || continuesRead(fields) {
 			continue
 		}
 		for _, field := range fields[1:] {
@@ -82,6 +91,20 @@ func editsInPlace(fields []string) bool {
 	for _, field := range fields[1:] {
 		if strings.HasPrefix(field, "-i") || strings.HasPrefix(field, "--in-place") {
 			return true
+		}
+	}
+	return false
+}
+
+// continuesRead reports whether a sed command prints a line range that starts after
+// line 1, which continues paging through a file whose first chunk was already counted.
+func continuesRead(fields []string) bool {
+	if path.Base(trimShellQuotes(fields[0])) != "sed" {
+		return false
+	}
+	for _, field := range fields[1:] {
+		if match := sedLineRange.FindStringSubmatch(trimShellQuotes(field)); match != nil {
+			return match[1] != "1"
 		}
 	}
 	return false
@@ -109,8 +132,12 @@ func skillsFromToolInput(inputKey string, input map[string]interface{}) []SkillI
 	return []SkillInvocation{{Name: name, Source: SkillSourceModel}}
 }
 
-// skillsFromReadTool returns the skill a file-read tool call loads, if it reads a SKILL.md.
+// skillsFromReadTool returns the skill a file-read tool call loads, if it reads a SKILL.md
+// from its first line. A read with an offset past line 1 continues an earlier load.
 func skillsFromReadTool(input map[string]interface{}) []SkillInvocation {
+	if offset, ok := input["offset"].(float64); ok && offset > 1 {
+		return nil
+	}
 	for _, key := range []string{"path", "file_path"} {
 		if skill, ok := skillFromFile(stringInput(input, key), SkillSourceModel); ok {
 			return []SkillInvocation{skill}
@@ -119,24 +146,11 @@ func skillsFromReadTool(input map[string]interface{}) []SkillInvocation {
 	return nil
 }
 
-var (
-	codexSkillBlock = regexp.MustCompile(`^<skill>\s*<name>([^<]+)</name>\s*<path>([^<]*)</path>`)
-	piSkillBlock    = regexp.MustCompile(`^<skill name="([^"]+)"(?: location="([^"]*)")?`)
-)
-
-// userSkillFromCodexPrompt returns the skill Codex injects as a user message when the user
-// mentions it with $name.
-func userSkillFromCodexPrompt(prompt string) []SkillInvocation {
-	return userSkillFromBlock(codexSkillBlock, prompt)
-}
+var piSkillBlock = regexp.MustCompile(`^<skill name="([^"]+)"(?: location="([^"]*)")?`)
 
 // userSkillFromPiPrompt returns the skill Pi expands from a /skill:name command.
 func userSkillFromPiPrompt(prompt string) []SkillInvocation {
-	return userSkillFromBlock(piSkillBlock, prompt)
-}
-
-func userSkillFromBlock(block *regexp.Regexp, prompt string) []SkillInvocation {
-	match := block.FindStringSubmatch(strings.TrimSpace(prompt))
+	match := piSkillBlock.FindStringSubmatch(strings.TrimSpace(prompt))
 	if match == nil {
 		return nil
 	}

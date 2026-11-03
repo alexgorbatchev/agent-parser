@@ -319,7 +319,13 @@ export interface IOpencodeTextPartData {
   readonly metadata?: Record<string, unknown>;
 }
 
-/** Tool invocation and result part. */
+/**
+ * Tool invocation and result part.
+ *
+ * The model loads a skill through the native `skill` tool, whose `state.input` is
+ * `{ name: string }` (see https://opencode.ai/docs/skills/). Parsers report a model skill
+ * invocation from that part.
+ */
 export interface IOpencodeToolPartData {
   readonly type: "tool";
   /** Tool name (e.g. "read", "edit", "bash", "glob", "grep", "write"). */

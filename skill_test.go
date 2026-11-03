@@ -28,6 +28,12 @@ func TestSkillsFromShellCommand(t *testing.T) {
 		{"git output mentioning the file", "git diff -- /x/skills/golang/SKILL.md", nil},
 		{"registry source outside a skills directory", "cat skills/user/disk-cleanup/SKILL.md", nil},
 		{"other markdown", "cat /x/skills/golang/README.md", nil},
+		{"first chunk of a paged read", "sed -n '1,200p' /x/skills/golang/SKILL.md", []string{"golang"}},
+		{"continuation chunk", "sed -n '201,400p' /x/skills/golang/SKILL.md", nil},
+		{"tail reads from the end", "tail -50 /x/skills/golang/SKILL.md", nil},
+		{"Codex system skill", "cat /home/dev/.codex/skills/.system/imagegen/SKILL.md", []string{"imagegen"}},
+		{"synced skill", "cat /home/dev/.agents/skills/synced/abc123/computer-use/SKILL.md", []string{"computer-use"}},
+		{"nested registry agent source", "cat skills/agent/github-issues/SKILL.md", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -105,16 +111,20 @@ func TestClaudeCodeResetClearsPendingCommand(t *testing.T) {
 
 func TestCodexSkillInvocations(t *testing.T) {
 	lines := []string{
-		// $name mention: Codex injects the skill as a user message.
+		// $name mention: the completed UserMessage lists the skill.
+		`{"timestamp":"2026-11-03T10:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"$disk-cleanup"},{"type":"skill","name":"disk-cleanup","path":"/home/dev/.agents/skills/disk-cleanup/SKILL.md"}]}}}`,
+		// The injected <skill> message is replayed into forked rollouts, so it is not counted.
 		`{"timestamp":"2026-11-03T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>disk-cleanup</name>\n<path>/home/dev/.agents/skills/disk-cleanup/SKILL.md</path>\nSkill body"}]}}`,
-		// Plain prompts are not skills.
-		`{"timestamp":"2026-11-03T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$disk-cleanup"}]}}`,
+		// Plain user messages are not skills.
+		`{"timestamp":"2026-11-03T10:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u2","content":[{"type":"text","text":"hello"}]}}}`,
 		// Model reads two skills in one successful command.
 		`{"timestamp":"2026-11-03T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","cat /home/dev/.agents/skills/bun/SKILL.md /home/dev/.agents/skills/typescript/SKILL.md"],"exit_code":0}}}`,
 		// Failed reads and non-shell argv forms.
 		`{"timestamp":"2026-11-03T10:00:02Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","cat /home/dev/.agents/skills/missing/SKILL.md"],"exit_code":1}}}`,
 		`{"timestamp":"2026-11-03T10:00:03Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["head","/home/dev/.agents/skills/golang/SKILL.md"],"exit_code":0}}}`,
 		`{"timestamp":"2026-11-03T10:00:04Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","git status --short"],"exit_code":0}}}`,
+		// A command the user ran with ! is not the model loading a skill.
+		`{"timestamp":"2026-11-03T10:00:05Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","cat /home/dev/.agents/skills/rust/SKILL.md"],"exit_code":0,"source":"user_shell"}}}`,
 	}
 	p := NewCodexParser()
 	var skills []SkillInvocation
@@ -140,8 +150,34 @@ func TestCodexSkillInvocations(t *testing.T) {
 	if !reflect.DeepEqual(skills, want) {
 		t.Errorf("skills = %+v, want %+v", skills, want)
 	}
-	if skillEvents != 2 {
-		t.Errorf("skill_invoked events = %d, want 2", skillEvents)
+	if skillEvents != 3 {
+		t.Errorf("skill_invoked events = %d, want 3", skillEvents)
+	}
+}
+
+func TestCodexForkedRolloutDoesNotRecountReplayedSkillMention(t *testing.T) {
+	// A forked child replays the parent's response_item history but not its
+	// item_completed records, so the parent's $name mention yields nothing here.
+	replayed := []string{
+		`{"timestamp":"2026-11-03T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"$disk-cleanup"}]}}`,
+		`{"timestamp":"2026-11-03T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>disk-cleanup</name>\n<path>/home/dev/.agents/skills/disk-cleanup/SKILL.md</path>\nSkill body"}]}}`,
+	}
+	p := NewCodexParser()
+	for _, line := range replayed {
+		events, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		if skills := skillsOf(events); len(skills) != 0 {
+			t.Errorf("replayed fork history produced skills %+v", skills)
+		}
+	}
+}
+
+func TestCodexUserMessageRejectsMalformedItem(t *testing.T) {
+	_, err := ParseCodexLine([]byte(`{"timestamp":"2026-11-03T10:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"not-an-array"}}}`))
+	if err == nil {
+		t.Fatal("expected an error for a malformed UserMessage item")
 	}
 }
 
@@ -158,6 +194,9 @@ func TestPiSkillInvocations(t *testing.T) {
 		`{"type":"message","timestamp":"2026-11-03T10:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"/home/dev/.pi/agent/skills/ask-user/SKILL.md"}}]}}`,
 		`{"type":"message","timestamp":"2026-11-03T10:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"read","arguments":{"path":"/repo/README.md"}}]}}`,
 		`{"type":"message","timestamp":"2026-11-03T10:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c3","name":"edit","arguments":{"path":"/home/dev/.pi/agent/skills/ask-user/SKILL.md"}}]}}`,
+		// Paging past line 1 continues the load already counted.
+		`{"type":"message","timestamp":"2026-11-03T10:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c4","name":"read","arguments":{"path":"/home/dev/.pi/agent/skills/ask-user/SKILL.md","offset":201,"limit":200}}]}}`,
+		`{"type":"message","timestamp":"2026-11-03T10:00:05Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c5","name":"read","arguments":{"path":"/home/dev/.pi/agent/skills/golang/SKILL.md","offset":1}}]}}`,
 	}
 	var skills []SkillInvocation
 	for _, line := range lines {
@@ -170,6 +209,7 @@ func TestPiSkillInvocations(t *testing.T) {
 	want := []SkillInvocation{
 		{Name: "github-issue", Source: SkillSourceUser, Path: "/home/dev/.pi/agent/skills/github-issue/SKILL.md"},
 		{Name: "ask-user", Source: SkillSourceModel, Path: "/home/dev/.pi/agent/skills/ask-user/SKILL.md"},
+		{Name: "golang", Source: SkillSourceModel, Path: "/home/dev/.pi/agent/skills/golang/SKILL.md"},
 	}
 	if !reflect.DeepEqual(skills, want) {
 		t.Errorf("skills = %+v, want %+v", skills, want)

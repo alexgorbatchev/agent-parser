@@ -204,6 +204,11 @@ export type PiStopReason =
 
 /**
  * User prompt message.
+ *
+ * A `/skill:NAME` command is recorded as a user message whose text starts with
+ * `<skill name="NAME" location="PATH/SKILL.md">` followed by the skill's content, which
+ * parsers report as a user skill invocation. The model loads skills with the `read` tool on
+ * `skills/NAME/SKILL.md`; a read with `offset` past line 1 continues an earlier load.
  */
 export interface IPiUserMessage {
   readonly role: "user";

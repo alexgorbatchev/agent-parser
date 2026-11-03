@@ -228,8 +228,11 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64) ([]ParsedEvent, erro
 	if err := json.Unmarshal(raw, &header); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed item: %w", err)
 	}
-	if header.Type == "CommandExecution" {
+	switch header.Type {
+	case "CommandExecution":
 		return parseCodexCommandExecution(raw, ts)
+	case "UserMessage":
+		return parseCodexUserMessageSkills(raw, ts)
 	}
 	if header.Type != "AgentMessage" {
 		return nil, nil
@@ -930,7 +933,6 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 							LastPrompt: stringPtr(cleanPrompt),
 							Title:      titlePtr,
 							Images:     images,
-							Skills:     userSkillFromCodexPrompt(cleanPrompt),
 						},
 					})
 				}
@@ -1020,6 +1022,40 @@ func extractInt(v interface{}) *int {
 type rawCodexCommandExecution struct {
 	Command  []string `json:"command"`
 	ExitCode *int     `json:"exit_code"`
+	Source   string   `json:"source"`
+}
+
+type rawCodexUserMessage struct {
+	Content []struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+	} `json:"content"`
+}
+
+// parseCodexUserMessageSkills emits a skill_invoked event for the skills a user mentions
+// with $name. The completed UserMessage lists them as skill content items. Forked child
+// rollouts replay the parent's response_item messages, including the injected <skill>
+// message, but not item_completed records, so counting here counts each mention once.
+func parseCodexUserMessageSkills(raw json.RawMessage, ts int64) ([]ParsedEvent, error) {
+	var item rawCodexUserMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed user message: %w", err)
+	}
+	var skills []SkillInvocation
+	for _, content := range item.Content {
+		if content.Type == "skill" && strings.TrimSpace(content.Name) != "" {
+			skills = append(skills, SkillInvocation{Name: strings.TrimSpace(content.Name), Source: SkillSourceUser, Path: content.Path})
+		}
+	}
+	if len(skills) == 0 {
+		return nil, nil
+	}
+	return []ParsedEvent{{
+		EventType: "skill_invoked",
+		Timestamp: ts,
+		Data:      EventData{Role: stringPtr("user"), Skills: skills},
+	}}, nil
 }
 
 // parseCodexCommandExecution emits a skill_invoked event when a completed shell command
@@ -1031,7 +1067,8 @@ func parseCodexCommandExecution(raw json.RawMessage, ts int64) ([]ParsedEvent, e
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed command execution: %w", err)
 	}
-	if item.ExitCode == nil || *item.ExitCode != 0 || len(item.Command) == 0 {
+	// user_shell marks a command the user ran with !, which is not a model loading a skill.
+	if item.ExitCode == nil || *item.ExitCode != 0 || len(item.Command) == 0 || item.Source == "user_shell" {
 		return nil, nil
 	}
 	script := strings.Join(item.Command, " ")

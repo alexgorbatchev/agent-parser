@@ -866,7 +866,27 @@ export interface IClaudeAssistantRecord extends IClaudeConversationalBase {
 }
 
 /**
+ * Input of the `Skill` tool, the model's way to load a skill. Parsers report a model skill
+ * invocation from the `tool_use` block that carries it.
+ */
+export interface IClaudeSkillToolInput {
+  /** Skill name, including any plugin prefix (e.g. "docs-writer", "workbench:deploy"). */
+  skill: string;
+  /** Optional arguments passed to the skill. */
+  args?: string;
+}
+
+/**
  * User record: Human input, injected tool results, or compaction summaries.
+ *
+ * Skill invocations appear as user records too:
+ * - A user-invoked skill is a record whose content is
+ *   `<command-message>NAME</command-message>\n<command-name>/NAME</command-name>`, followed by
+ *   an `isMeta: true` record without `sourceToolUseID` whose first text block starts with
+ *   `Base directory for this skill: <dir>`. Built-in commands such as `/clear` have the same
+ *   command tags but no skill-content record, so parsers count only the confirmed sequence.
+ * - A model-invoked skill (the `Skill` tool) is followed by the same skill-content record,
+ *   but with `sourceToolUseID` set to the `Skill` call's ID; parsers count the call instead.
  */
 export interface IClaudeUserRecord extends IClaudeConversationalBase {
   type: "user";

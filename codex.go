@@ -228,6 +228,9 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64) ([]ParsedEvent, erro
 	if err := json.Unmarshal(raw, &header); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed item: %w", err)
 	}
+	if header.Type == "CommandExecution" {
+		return parseCodexCommandExecution(raw, ts)
+	}
 	if header.Type != "AgentMessage" {
 		return nil, nil
 	}
@@ -927,6 +930,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 							LastPrompt: stringPtr(cleanPrompt),
 							Title:      titlePtr,
 							Images:     images,
+							Skills:     userSkillFromCodexPrompt(cleanPrompt),
 						},
 					})
 				}
@@ -1011,4 +1015,36 @@ func extractInt(v interface{}) *int {
 		return &i
 	}
 	return nil
+}
+
+type rawCodexCommandExecution struct {
+	Command  []string `json:"command"`
+	ExitCode *int     `json:"exit_code"`
+}
+
+// parseCodexCommandExecution emits a skill_invoked event when a completed shell command
+// read one or more skills' SKILL.md files. Codex has no skill tool: the model loads a
+// skill by reading its file, directly or from code mode, and every executed command is
+// recorded as a CommandExecution item.
+func parseCodexCommandExecution(raw json.RawMessage, ts int64) ([]ParsedEvent, error) {
+	var item rawCodexCommandExecution
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed command execution: %w", err)
+	}
+	if item.ExitCode == nil || *item.ExitCode != 0 || len(item.Command) == 0 {
+		return nil, nil
+	}
+	script := strings.Join(item.Command, " ")
+	if len(item.Command) >= 3 && (item.Command[1] == "-lc" || item.Command[1] == "-c") {
+		script = item.Command[2]
+	}
+	skills := skillsFromShellCommand(script)
+	if len(skills) == 0 {
+		return nil, nil
+	}
+	return []ParsedEvent{{
+		EventType: "skill_invoked",
+		Timestamp: ts,
+		Data:      EventData{Role: stringPtr("assistant"), Skills: skills},
+	}}, nil
 }

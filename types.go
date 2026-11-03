@@ -70,6 +70,9 @@ type EventData struct {
 	MessageUUID *string `json:"messageUuid,omitempty"`
 	// MergedMessageUUIDs lists the other messages Claude Code merged into this turn.
 	MergedMessageUUIDs []string `json:"mergedMessageUuids,omitempty"`
+	// Skills lists the agent skills this event invokes: on the tool call that loads a
+	// skill, on the user turn that runs one, or on a skill_invoked event.
+	Skills []SkillInvocation `json:"skills,omitempty"`
 }
 
 // ParsedEvent represents a single normalized event emitted by a harness parser.

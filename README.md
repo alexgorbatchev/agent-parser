@@ -9,6 +9,7 @@
 - **Session title extraction**: Automatically identifies session titles from user prompts, explicit title records (`ai-title`, `custom-title`), and first human messages while stripping harness-injected synthetic context blocks.
 - **Rate limit and error detection**: Captures HTTP status codes, rate limit resets, retry delays, and tool execution failures.
 - **Native recaps and questions**: Emits Claude Code `system/away_summary` text as `summary` events. Codex `request_user_input`, `request_user_input_async`, and completed `AgentMessage` questions produce `question_prompt` events; ordinary completed agent messages produce `agent_message` events.
+- **Skill invocations**: `EventData.Skills` lists the agent skills an event invokes, with the skill name, whether the model or the user invoked it, and its path when recorded. Model loads appear on the tool call that loads the skill (Claude Code `Skill`, OpenCode `skill`, Pi `read` of a `SKILL.md`), and user invocations on the user turn that runs one (Claude Code slash commands, Codex `$name`, Pi `/skill:name`). Codex has no skill tool, so a successful shell command that reads skills' `SKILL.md` files emits a `skill_invoked` event.
 - **Zero CGo overhead**: Reads OpenCode SQLite databases through the pure Go `modernc.org/sqlite` driver, so consumers can cross-compile with `CGO_ENABLED=0`.
 
 # How It Works

@@ -84,43 +84,43 @@ type OpencodeToolPartState struct {
 // OpencodePartData represents the deserialized JSON payload from the part.data column.
 // Grounded in upstream OpenCode Part types (`types.gen.ts:384-405`).
 type OpencodePartData struct {
-	Type     string                  `json:"type"` // "text" | "tool" | "reasoning" | "step-start" | "step-finish" | "file" | "patch" | "retry"
-	Text     string                  `json:"text,omitempty"`
-	Tool     string                  `json:"tool,omitempty"`
-	CallID   string                  `json:"callID,omitempty"`
-	State    *OpencodeToolPartState  `json:"state,omitempty"`
-	Reason   string                  `json:"reason,omitempty"`
-	Cost     *float64                `json:"cost,omitempty"`
-	Tokens   *OpencodeTokens         `json:"tokens,omitempty"`
-	Path     string                  `json:"path,omitempty"`
-	Content  string                  `json:"content,omitempty"`
-	Snapshot map[string]interface{}  `json:"snapshot,omitempty"`
-	Metadata map[string]interface{}  `json:"metadata,omitempty"`
-	Time     *OpencodeToolPartTime   `json:"time,omitempty"`
-	Attempt  *int                    `json:"attempt,omitempty"`
-	Error    interface{}             `json:"error,omitempty"`
+	Type     string                 `json:"type"` // "text" | "tool" | "reasoning" | "step-start" | "step-finish" | "file" | "patch" | "retry"
+	Text     string                 `json:"text,omitempty"`
+	Tool     string                 `json:"tool,omitempty"`
+	CallID   string                 `json:"callID,omitempty"`
+	State    *OpencodeToolPartState `json:"state,omitempty"`
+	Reason   string                 `json:"reason,omitempty"`
+	Cost     *float64               `json:"cost,omitempty"`
+	Tokens   *OpencodeTokens        `json:"tokens,omitempty"`
+	Path     string                 `json:"path,omitempty"`
+	Content  string                 `json:"content,omitempty"`
+	Snapshot map[string]interface{} `json:"snapshot,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Time     *OpencodeToolPartTime  `json:"time,omitempty"`
+	Attempt  *int                   `json:"attempt,omitempty"`
+	Error    interface{}            `json:"error,omitempty"`
 }
 
 // OpencodeSession represents a fully parsed OpenCode session.
 type OpencodeSession struct {
-	ID          string                 `json:"id"`
-	ProjectID   *string                `json:"projectId,omitempty"`
-	ParentID    *string                `json:"parentId,omitempty"`
-	Slug        *string                `json:"slug,omitempty"`
-	Directory   string                 `json:"directory"`
-	Title       string                 `json:"title"`
-	Version     string                 `json:"version"`
-	Agent       string                 `json:"agent"`
-	Model       string                 `json:"model"`
-	ModelConfig *OpencodeModelConfig   `json:"modelConfig,omitempty"`
-	Cost        float64                `json:"cost"`
-	Tokens      OpencodeTokens         `json:"tokens"`
-	TimeCreated int64                  `json:"timeCreated"`
-	TimeUpdated int64                  `json:"timeUpdated"`
-	TimeArchived *int64                `json:"timeArchived,omitempty"`
-	IsArchived  bool                   `json:"isArchived"`
-	IsSubagent  bool                   `json:"isSubagent"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID           string                 `json:"id"`
+	ProjectID    *string                `json:"projectId,omitempty"`
+	ParentID     *string                `json:"parentId,omitempty"`
+	Slug         *string                `json:"slug,omitempty"`
+	Directory    string                 `json:"directory"`
+	Title        string                 `json:"title"`
+	Version      string                 `json:"version"`
+	Agent        string                 `json:"agent"`
+	Model        string                 `json:"model"`
+	ModelConfig  *OpencodeModelConfig   `json:"modelConfig,omitempty"`
+	Cost         float64                `json:"cost"`
+	Tokens       OpencodeTokens         `json:"tokens"`
+	TimeCreated  int64                  `json:"timeCreated"`
+	TimeUpdated  int64                  `json:"timeUpdated"`
+	TimeArchived *int64                 `json:"timeArchived,omitempty"`
+	IsArchived   bool                   `json:"isArchived"`
+	IsSubagent   bool                   `json:"isSubagent"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // OpencodeMessage represents a row from the message table.
@@ -646,6 +646,10 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 						}
 
 						fileMod := NormalizeFileModification(p.Data.Tool, toolInput)
+						var skills []SkillInvocation
+						if p.Data.Tool == "skill" {
+							skills = skillsFromToolInput("name", toolInput)
+						}
 						events = append(events, ParsedEvent{
 							EventType: "tool_use",
 							Timestamp: startTs,
@@ -657,6 +661,7 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 								ToolInput:        toolInput,
 								FileModification: fileMod,
 								Content:          toolTitle,
+								Skills:           skills,
 							},
 						})
 
@@ -799,9 +804,8 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 			}
 
 			isAborted := isOpencodeMessageAborted(msg.Data.Error)
-			hasTerminalError := !isAborted && (
-				(msg.Data.Finish != nil && *msg.Data.Finish == "error") ||
-					(msg.Data.Error != nil && extractOpencodeError(msg.Data.Error) != ""))
+			hasTerminalError := !isAborted && ((msg.Data.Finish != nil && *msg.Data.Finish == "error") ||
+				(msg.Data.Error != nil && extractOpencodeError(msg.Data.Error) != ""))
 
 			if hasTerminalError {
 				errText := ""
@@ -845,14 +849,14 @@ type rowScanner interface {
 
 func scanOpencodeSession(s rowScanner) (*OpencodeSession, error) {
 	var (
-		id, directory                                string
-		projectID, parentID, slug, title, version    sql.NullString
-		agent, model, metadata                       sql.NullString
-		cost                                         sql.NullFloat64
-		tokensInput, tokensOutput, tokensReasoning   int64
-		tokensCacheRead, tokensCacheWrite            int64
-		timeCreated, timeUpdated                     int64
-		timeArchived                                 sql.NullInt64
+		id, directory                              string
+		projectID, parentID, slug, title, version  sql.NullString
+		agent, model, metadata                     sql.NullString
+		cost                                       sql.NullFloat64
+		tokensInput, tokensOutput, tokensReasoning int64
+		tokensCacheRead, tokensCacheWrite          int64
+		timeCreated, timeUpdated                   int64
+		timeArchived                               sql.NullInt64
 	)
 
 	err := s.Scan(
@@ -1184,4 +1188,3 @@ func extractOpencodeError(v interface{}) string {
 	}
 	return res
 }
-

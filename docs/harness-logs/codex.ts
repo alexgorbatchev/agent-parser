@@ -484,7 +484,63 @@ export interface ICodexItemCompletedPayload {
   readonly turn_id?: string;
   readonly started_at_ms?: number;
   readonly completed_at_ms?: number;
-  readonly item: ICodexCompletedAgentMessage | Readonly<Record<string, unknown>>;
+  readonly item:
+    | ICodexCompletedAgentMessage
+    | ICodexCompletedCommandExecution
+    | ICodexCompletedUserMessage
+    | Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Executed shell command observed in Codex 0.166.0, whether the model ran it directly or
+ * from code mode. Codex has no skill tool: the model loads a skill by reading its SKILL.md,
+ * so parsers derive model-loaded skills from successful read commands here.
+ */
+export interface ICodexCompletedCommandExecution {
+  readonly type: "CommandExecution";
+  readonly id?: string;
+  /** Full argv, typically ["/bin/zsh", "-lc", "<script>"]. */
+  readonly command: readonly string[];
+  readonly cwd?: string;
+  readonly exit_code?: number | null;
+  readonly status?: string;
+  readonly aggregated_output?: string;
+  readonly duration?: unknown;
+  readonly process_id?: string | null;
+  readonly source?: string;
+  readonly parsed_cmd?: readonly ICodexParsedCommand[];
+}
+
+export interface ICodexParsedCommand {
+  /** For example "read", "list_files", "search", or "unknown". */
+  readonly type: string;
+  readonly cmd: string;
+  readonly name?: string;
+  readonly path?: string;
+}
+
+/**
+ * User message completion observed in Codex 0.166.0. A `$name` skill mention adds a
+ * `skill` content item; Codex also injects the skill as a user `response_item` message
+ * starting with `<skill>\n<name>NAME</name>\n<path>PATH</path>`, which parsers count.
+ */
+export interface ICodexCompletedUserMessage {
+  readonly type: "UserMessage";
+  readonly id?: string;
+  readonly client_id?: string;
+  readonly content: readonly (ICodexUserMessageTextItem | ICodexUserMessageSkillItem)[];
+}
+
+export interface ICodexUserMessageTextItem {
+  readonly type: "text";
+  readonly text: string;
+  readonly text_elements?: readonly unknown[];
+}
+
+export interface ICodexUserMessageSkillItem {
+  readonly type: "skill";
+  readonly name: string;
+  readonly path: string;
 }
 
 export interface ICodexCompletedAgentMessage {

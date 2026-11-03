@@ -9,6 +9,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -81,6 +82,8 @@ type rawJSONLine struct {
 	Operation           string      `json:"operation,omitempty"`
 	Reason              string      `json:"reason,omitempty"`
 	CommandUUID         string      `json:"commandUuid,omitempty"`
+	IsMeta              bool        `json:"isMeta,omitempty"`
+	SourceToolUseID     string      `json:"sourceToolUseID,omitempty"`
 }
 
 func parseTimestamp(v interface{}) int64 {
@@ -350,16 +353,19 @@ type ClaudeCodeParser struct {
 	sessionModels  map[string]string
 	lastTimestamp  int64
 	seenRequests   *requestDedup
+	// pendingCommands holds each session's last slash command until its skill content arrives.
+	pendingCommands map[string]string
 }
 
 // NewClaudeCodeParser creates a new stateful parser stream for Claude Code transcripts.
 func NewClaudeCodeParser() *ClaudeCodeParser {
 	return &ClaudeCodeParser{
-		seenSessions:   make(map[string]bool),
-		explicitTitles: make(map[string]bool),
-		sessionTitles:  make(map[string]string),
-		sessionModels:  make(map[string]string),
-		seenRequests:   newRequestDedup(),
+		seenSessions:    make(map[string]bool),
+		explicitTitles:  make(map[string]bool),
+		sessionTitles:   make(map[string]string),
+		sessionModels:   make(map[string]string),
+		seenRequests:    newRequestDedup(),
+		pendingCommands: make(map[string]string),
 	}
 }
 
@@ -374,6 +380,7 @@ func (p *ClaudeCodeParser) Reset() {
 	p.sessionModels = make(map[string]string)
 	p.lastTimestamp = 0
 	p.seenRequests = newRequestDedup()
+	p.pendingCommands = make(map[string]string)
 }
 
 // ParseLine parses a single line of Claude Code JSONL log output in a session stream.
@@ -399,7 +406,7 @@ func (p *ClaudeCodeParser) ParseLine(line []byte) ([]ParsedEvent, error) {
 		}
 	}
 
-	events := parseClaudeCodeLineEvents(raw, ts, p.explicitTitles, p.sessionTitles, p.sessionModels, p.seenRequests)
+	events := parseClaudeCodeLineEvents(raw, ts, p.explicitTitles, p.sessionTitles, p.sessionModels, p.seenRequests, p.pendingCommands)
 	emitRunStarted := false
 	if raw.SessionID != "" {
 		if !p.seenSessions[raw.SessionID] {
@@ -428,6 +435,7 @@ func parseClaudeCodeLineEvents(
 	sessionTitles map[string]string,
 	sessionModels map[string]string,
 	seenRequests *requestDedup,
+	pendingCommands map[string]string,
 ) []ParsedEvent {
 	var events []ParsedEvent
 	isSubagent := raw.IsSidechain || raw.AgentID != ""
@@ -585,6 +593,7 @@ func parseClaudeCodeLineEvents(
 			images := claudeImages(blocks)
 			if (len(textParts) > 0 || len(images) > 0) && !hasToolResult {
 				fullPrompt := strings.Join(textParts, "\n")
+				skills := claudeUserSkills(raw, sessKey, fullPrompt, pendingCommands)
 				var titlePtr *string
 				shouldSetTitle := !isSubagent && (explicitTitles == nil || (!explicitTitles[sessKey] && sessionTitles[sessKey] == ""))
 				if shouldSetTitle {
@@ -608,6 +617,7 @@ func parseClaudeCodeLineEvents(
 						Images:             images,
 						MessageUUID:        optionalString(raw.UUID),
 						MergedMessageUUIDs: raw.MergedSendUUIDs,
+						Skills:             skills,
 					},
 				})
 			}
@@ -719,6 +729,10 @@ func parseClaudeCodeLineEvents(
 						})
 					} else {
 						fileMod := NormalizeFileModification(toolName, b.Input)
+						var skills []SkillInvocation
+						if toolName == "Skill" {
+							skills = skillsFromToolInput("skill", b.Input)
+						}
 						events = append(events, ParsedEvent{
 							EventType: "tool_call",
 							Timestamp: ts,
@@ -731,6 +745,7 @@ func parseClaudeCodeLineEvents(
 								ToolInput:        b.Input,
 								FileModification: fileMod,
 								Model:            modelPtr,
+								Skills:           skills,
 							},
 						})
 					}
@@ -880,4 +895,36 @@ func parseClaudeCodeLineEvents(
 	}
 
 	return events
+}
+
+// claudeUserSkills returns the skill a user record runs. Claude Code records a slash
+// command, then an isMeta message holding the skill's content. Built-in commands such as
+// /clear have no skill content, and model-loaded skills carry sourceToolUseID and are
+// counted on their Skill tool call instead.
+func claudeUserSkills(raw rawJSONLine, sessKey, prompt string, pendingCommands map[string]string) []SkillInvocation {
+	if command := claudeCommandFromPrompt(prompt); command != "" {
+		if pendingCommands != nil {
+			pendingCommands[sessKey] = command
+		}
+		return nil
+	}
+	dir := claudeSkillDirFromMeta(prompt)
+	if !raw.IsMeta || dir == "" {
+		if !raw.IsMeta && pendingCommands != nil {
+			delete(pendingCommands, sessKey)
+		}
+		return nil
+	}
+	if raw.SourceToolUseID != "" {
+		return nil
+	}
+	name := ""
+	if pendingCommands != nil {
+		name = pendingCommands[sessKey]
+		delete(pendingCommands, sessKey)
+	}
+	if name == "" {
+		name = path.Base(dir)
+	}
+	return []SkillInvocation{{Name: name, Source: SkillSourceUser, Path: dir}}
 }

@@ -12,23 +12,23 @@ import (
 )
 
 type rawPiContentBlock struct {
-	Type             string                 `json:"type"` // "text" | "thinking" | "toolCall" | "tool_call" | "toolResult" | "tool_result" | "image"
-	Text             string                 `json:"text,omitempty"`
-	Thinking         string                 `json:"thinking,omitempty"`
-	ToolName         string                 `json:"toolName,omitempty"`
-	ToolNameSnake    string                 `json:"tool_name,omitempty"`
-	ToolCallID       string                 `json:"toolCallId,omitempty"`
-	ToolCallIDSnake  string                 `json:"tool_call_id,omitempty"`
-	Name             string                 `json:"name,omitempty"`
-	ID               string                 `json:"id,omitempty"`
-	Input            map[string]interface{} `json:"input,omitempty"`
-	Parameters       map[string]interface{} `json:"parameters,omitempty"`
-	Arguments        map[string]interface{} `json:"arguments,omitempty"`
-	Content          interface{}            `json:"content,omitempty"`
-	IsError          *bool                  `json:"isError,omitempty"`
-	IsErrorSnake     *bool                  `json:"is_error,omitempty"`
-	Data             string                 `json:"data,omitempty"`
-	MimeType         string                 `json:"mimeType,omitempty"`
+	Type            string                 `json:"type"` // "text" | "thinking" | "toolCall" | "tool_call" | "toolResult" | "tool_result" | "image"
+	Text            string                 `json:"text,omitempty"`
+	Thinking        string                 `json:"thinking,omitempty"`
+	ToolName        string                 `json:"toolName,omitempty"`
+	ToolNameSnake   string                 `json:"tool_name,omitempty"`
+	ToolCallID      string                 `json:"toolCallId,omitempty"`
+	ToolCallIDSnake string                 `json:"tool_call_id,omitempty"`
+	Name            string                 `json:"name,omitempty"`
+	ID              string                 `json:"id,omitempty"`
+	Input           map[string]interface{} `json:"input,omitempty"`
+	Parameters      map[string]interface{} `json:"parameters,omitempty"`
+	Arguments       map[string]interface{} `json:"arguments,omitempty"`
+	Content         interface{}            `json:"content,omitempty"`
+	IsError         *bool                  `json:"isError,omitempty"`
+	IsErrorSnake    *bool                  `json:"is_error,omitempty"`
+	Data            string                 `json:"data,omitempty"`
+	MimeType        string                 `json:"mimeType,omitempty"`
 }
 
 type rawPiCostBreakdown struct {
@@ -271,6 +271,7 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 					Content:    stringPtr(fullPrompt),
 					LastPrompt: stringPtr(fullPrompt),
 					Images:     piImages(blocks),
+					Skills:     userSkillFromPiPrompt(fullPrompt),
 				},
 			})
 
@@ -402,6 +403,10 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 						})
 					} else {
 						fileMod := NormalizeFileModification(toolName, params)
+						var skills []SkillInvocation
+						if strings.EqualFold(toolName, "read") {
+							skills = skillsFromReadTool(params)
+						}
 						events = append(events, ParsedEvent{
 							EventType: "tool_call",
 							Timestamp: ts,
@@ -413,6 +418,7 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 								ToolInput:        params,
 								FileModification: fileMod,
 								Model:            modelPtr,
+								Skills:           skills,
 							},
 						})
 					}

@@ -73,6 +73,7 @@ func buildHarnessHome(t *testing.T) string {
 	home := t.TempDir()
 	writeFixture(t, filepath.Join(home, ".claude/projects/-repo/11111111-aaaa.jsonl"), "{}\n")
 	writeFixture(t, filepath.Join(home, ".claude/projects/-repo/11111111-aaaa/subagents/agent-a1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(home, ".claude/projects/-repo/11111111-aaaa/subagents/agent-a1.meta.json"), `{"agentType":"general-purpose"}`)
 	writeFixture(t, filepath.Join(home, ".claude/projects/-repo/notes.txt"), "not a transcript\n")
 	writeFixture(t, filepath.Join(home, ".codex/sessions/2026/11/03/rollout-2026-11-03T10-00-00-01a1aaaa-0000-7000-8000-000000000001.jsonl"), "{}\n")
 	writeZstdFixture(t, filepath.Join(home, ".codex/sessions/2026/10/01/rollout-2026-10-01T10-00-00-01a1aaaa-0000-7000-8000-000000000002.jsonl.zst"), "{}\n")
@@ -312,6 +313,7 @@ func TestDiscoverClaudeCodeSubagentLayouts(t *testing.T) {
 	projects := filepath.Join(home, ".claude/projects/-repo")
 	writeFixture(t, filepath.Join(projects, "sess-1.jsonl"), "{}\n")
 	writeFixture(t, filepath.Join(projects, "sess-1/subagents/workflows/wf_1/agent-w1.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(projects, "sess-1/subagents/workflows/wf_1/agent-w1.meta.json"), `{"agentType":"general-purpose"}`)
 	writeFixture(t, filepath.Join(projects, "sess-1/subagents/workflows/wf_1/journal.jsonl"), `{"type":"launched"}`+"\n")
 	writeFixture(t, filepath.Join(projects, "sess-1/tool-results/output.jsonl"), "{}\n")
 	writeFixture(t, filepath.Join(projects, "agent-legacy.jsonl"), "{}\n")
@@ -522,8 +524,9 @@ func TestDiscoverClaudeCodeForks(t *testing.T) {
 	writeFixture(t, filepath.Join(subagents, "agent-p1.meta.json"), `{"agentType":"general-purpose"}`)
 	writeFixture(t, filepath.Join(subagents, "agent-f2.jsonl"), `{"type":"fork-context-ref","agentId":"f2","parentSessionId":"sess"}`+"\n")
 	writeFixture(t, filepath.Join(subagents, "agent-f2.meta.json"), `{"agentType":"fork","isFork":true,"toolUseId":"toolu_agent_spawn","parentAgentId":"p1"}`)
-	// A plain subagent without a meta file.
-	writeFixture(t, filepath.Join(subagents, "agent-plain.jsonl"), "{}\n")
+	// A workflow fork whose parent lives in the subagents directory, not beside it.
+	writeFixture(t, filepath.Join(subagents, "workflows/wf_1/agent-f3.jsonl"), "{}\n")
+	writeFixture(t, filepath.Join(subagents, "workflows/wf_1/agent-f3.meta.json"), `{"isFork":true,"toolUseId":"toolu_agent_spawn","parentAgentId":"p1"}`)
 
 	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessClaudeCode}})
 	if err != nil {
@@ -539,7 +542,10 @@ func TestDiscoverClaudeCodeForks(t *testing.T) {
 	if s := got["agent-f2"]; !s.Fork || !s.ForkedAt.Equal(time.Date(2026, 11, 3, 22, 20, 0, 0, time.UTC)) {
 		t.Errorf("agent-spawned fork = %+v", s)
 	}
-	for _, id := range []string{"agent-p1", "agent-plain", "sess"} {
+	if s := got["agent-f3"]; !s.Fork || !s.ForkedAt.Equal(time.Date(2026, 11, 3, 22, 20, 0, 0, time.UTC)) {
+		t.Errorf("workflow fork = %+v", s)
+	}
+	for _, id := range []string{"agent-p1", "sess"} {
 		if s := got[id]; s.Fork || !s.ForkedAt.IsZero() {
 			t.Errorf("%s is not a fork: %+v", id, s)
 		}
@@ -555,6 +561,7 @@ func TestDiscoverClaudeCodeForkErrors(t *testing.T) {
 		"unknown spawning call": {`{"isFork":true,"toolUseId":"toolu_missing"}`, `{"type":"user"}`, "tool call toolu_missing not found"},
 		"no spawning call":      {`{"isFork":true}`, `{"type":"user"}`, "names no spawning tool call"},
 		"unreadable meta":       {`not json`, `{"type":"user"}`, "reading Claude Code subagent meta"},
+		"missing meta":          {"", `{"type":"user"}`, "agent-f.meta.json"},
 		"missing parent":        {`{"isFork":true,"toolUseId":"toolu_x","parentAgentId":"gone"}`, `{"type":"user"}`, "agent-gone.jsonl"},
 		"bad parent record":     {`{"isFork":true,"toolUseId":"toolu_x"}`, `{"id":"toolu_x", broken`, "reading"},
 		"bad timestamp":         {`{"isFork":true,"toolUseId":"toolu_x"}`, `{"timestamp":"later","message":{"content":[{"id":"toolu_x"}]}}`, "parsing time"},
@@ -566,7 +573,9 @@ func TestDiscoverClaudeCodeForkErrors(t *testing.T) {
 			project := filepath.Join(home, ".claude/projects/-repo")
 			writeFixture(t, filepath.Join(project, "sess.jsonl"), tt.session+"\n")
 			writeFixture(t, filepath.Join(project, "sess/subagents/agent-f.jsonl"), "{}\n")
-			writeFixture(t, filepath.Join(project, "sess/subagents/agent-f.meta.json"), tt.meta)
+			if tt.meta != "" {
+				writeFixture(t, filepath.Join(project, "sess/subagents/agent-f.meta.json"), tt.meta)
+			}
 
 			sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessClaudeCode}})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -592,10 +601,11 @@ func TestDiscoverPiForkTimes(t *testing.T) {
 	writeFixture(t, filepath.Join(forks, "2026-09-20T03-09-01-836Z_good.jsonl"),
 		`{"type":"session","version":3,"id":"good","timestamp":"2026-09-20T03:09:01.836Z"}`+"\n")
 	writeFixture(t, filepath.Join(forks, "2026-09-20T03-10-00-000Z_bad.jsonl"), `{"type":"message"}`+"\n")
+	writeFixture(t, filepath.Join(forks, "2026-09-20T03-11-00-000Z_untimed.jsonl"), `{"type":"session","id":"untimed"}`+"\n")
 
 	sources, err := DiscoverSessions(context.Background(), DiscoverOptions{Home: home, Harnesses: []Harness{HarnessPi}})
-	if err == nil || !strings.Contains(err.Error(), "session header") {
-		t.Fatalf("err = %v, want the bad fork header reported", err)
+	if err == nil || !strings.Contains(err.Error(), "does not start with a session header") || !strings.Contains(err.Error(), "has no session header timestamp") {
+		t.Fatalf("err = %v, want the bad and untimed fork headers reported", err)
 	}
 	got := map[string]SessionSource{}
 	for _, source := range sources {
@@ -604,7 +614,19 @@ func TestDiscoverPiForkTimes(t *testing.T) {
 	if s := got["good"]; !s.Fork || !s.ForkedAt.Equal(time.Date(2026, 9, 20, 3, 9, 1, 836_000_000, time.UTC)) {
 		t.Errorf("fork = %+v", s)
 	}
-	if s, ok := got["bad"]; !ok || !s.Fork || !s.ForkedAt.IsZero() {
-		t.Errorf("a fork with a bad header must still be listed without a fork time: %+v", s)
+	for _, id := range []string{"bad", "untimed"} {
+		if s, ok := got[id]; !ok || !s.Fork || !s.ForkedAt.IsZero() {
+			t.Errorf("fork %s must still be listed without a fork time: %+v", id, s)
+		}
+	}
+}
+
+func TestToolCallTimeStopsOnCancel(t *testing.T) {
+	transcript := filepath.Join(t.TempDir(), "parent.jsonl")
+	writeFixture(t, transcript, `{"timestamp":"2026-11-03T22:00:00Z","id":"toolu_x"}`+"\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := toolCallTime(ctx, transcript, "toolu_x"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }

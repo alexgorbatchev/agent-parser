@@ -60,8 +60,9 @@ type SessionSource struct {
 	// parent's history before its own entries.
 	Fork bool `json:"fork,omitempty"`
 	// ForkedAt is when a fork was created: the parent's spawning tool call for a Claude Code
-	// fork, and the session header for a Pi fork. Events before it are replayed parent
-	// history. It is zero when the session is not a fork or the time could not be read.
+	// fork, and the session header for a Pi fork. Events at or before it are replayed parent
+	// history; a copied Claude Code fork replays the spawning call itself with exactly this
+	// time. It is zero when the session is not a fork or the time could not be read.
 	ForkedAt time.Time `json:"forkedAt,omitzero"`
 	// Archived marks a Codex rollout moved to archived_sessions.
 	Archived bool `json:"archived,omitempty"`
@@ -269,7 +270,7 @@ func discoverClaudeCode(ctx context.Context, home string) ([]SessionSource, erro
 			}
 			var err error
 			if source.Subagent && len(rel) >= 4 {
-				err = markClaudeCodeFork(&source, filepath.Join(projects, rel[0], rel[1]+".jsonl"))
+				err = markClaudeCodeFork(ctx, &source, filepath.Join(projects, rel[0], rel[1]+".jsonl"))
 			}
 			sources = append(sources, source)
 			return err
@@ -311,14 +312,12 @@ type claudeCodeForkMeta struct {
 
 // markClaudeCodeFork reads the subagent's meta file and, for a fork, sets Fork and
 // ForkedAt from the parent's tool call that spawned it. The parent is the subagent named
-// by parentAgentId in the same directory, or the session transcript. A subagent without a
-// meta file is not a fork.
-func markClaudeCodeFork(source *SessionSource, sessionTranscript string) error {
+// by parentAgentId, looked up beside the fork and then in the session's subagents
+// directory, or the session transcript when parentAgentId is empty. A missing meta file
+// is reported, because Claude Code writes one for every subagent.
+func markClaudeCodeFork(ctx context.Context, source *SessionSource, sessionTranscript string) error {
 	metaPath := strings.TrimSuffix(source.Path, ".jsonl") + ".meta.json"
 	data, err := os.ReadFile(metaPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("reading Claude Code subagent meta: %w", err)
 	}
@@ -332,9 +331,14 @@ func markClaudeCodeFork(source *SessionSource, sessionTranscript string) error {
 	source.Fork = true
 	parent := sessionTranscript
 	if meta.ParentAgentID != "" {
-		parent = filepath.Join(filepath.Dir(source.Path), "agent-"+meta.ParentAgentID+".jsonl")
+		name := "agent-" + meta.ParentAgentID + ".jsonl"
+		parent = filepath.Join(filepath.Dir(source.Path), name)
+		if _, err := os.Stat(parent); errors.Is(err, fs.ErrNotExist) {
+			// A workflow fork's parent can live in the session's subagents directory.
+			parent = filepath.Join(strings.TrimSuffix(sessionTranscript, ".jsonl"), "subagents", name)
+		}
 	}
-	forkedAt, err := toolCallTime(parent, meta.ToolUseID)
+	forkedAt, err := toolCallTime(ctx, parent, meta.ToolUseID)
 	if err != nil {
 		return fmt.Errorf("finding when Claude Code fork %s was spawned: %w", source.Path, err)
 	}
@@ -344,7 +348,7 @@ func markClaudeCodeFork(source *SessionSource, sessionTranscript string) error {
 
 // toolCallTime returns the timestamp of the transcript record holding the tool call with
 // the given ID.
-func toolCallTime(transcript, toolUseID string) (time.Time, error) {
+func toolCallTime(ctx context.Context, transcript, toolUseID string) (time.Time, error) {
 	if toolUseID == "" {
 		return time.Time{}, errors.New("the fork names no spawning tool call")
 	}
@@ -357,6 +361,9 @@ func toolCallTime(transcript, toolUseID string) (time.Time, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 1<<20), maxTranscriptLineBytes)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return time.Time{}, err
+		}
 		if !bytes.Contains(scanner.Bytes(), needle) {
 			continue
 		}
@@ -455,6 +462,9 @@ func piSource(path string, rel []string, info fs.FileInfo) (SessionSource, bool,
 		header, err := readPiHeader(path)
 		if err != nil {
 			return source, true, err
+		}
+		if header.Timestamp.IsZero() {
+			return source, true, fmt.Errorf("pi fork %s has no session header timestamp", path)
 		}
 		source.ForkedAt = header.Timestamp
 		return source, true, nil

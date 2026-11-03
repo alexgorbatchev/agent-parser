@@ -48,8 +48,9 @@
  *    - Each subagent transcript may have an `agent-<agentId>.meta.json` sibling. A fork's meta holds
  *      `{"agentType":"fork","isFork":true,"toolUseId":"<spawning tool_use id>","parentAgentId":"<id>"}`;
  *      `parentAgentId` is absent when the session itself spawned the fork. A copied fork transcript
- *      starts with the parent's records verbatim (same `uuid` and original `timestamp`), so events
- *      before the parent's spawning tool call are replays. A fork that starts with a
+ *      starts with copies of the parent's records that keep their original `timestamp` (the `uuid`
+ *      can differ), through the parent's spawning tool call itself, so events at or before that
+ *      call's timestamp are replays. A fork that starts with a
  *      `{"type":"fork-context-ref","parentSessionId":...,"parentLastUuid":...}` record references the
  *      parent context instead of copying it.
  *    @see https://github.com/d1ll0n/parse-cc/blob/main/src/subagents.ts#L20-L80

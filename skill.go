@@ -56,20 +56,23 @@ var shellReadCommands = map[string]bool{
 
 var sedLineRange = regexp.MustCompile(`^(\d+)(,\d+)?p$`)
 
-var shellSeparator = regexp.MustCompile(`&&|\|\||[;|\n]`)
+var shellCommandSeparator = regexp.MustCompile(`&&|\|\||[;\n]`)
 
-// skillsFromShellCommand returns the skills whose SKILL.md a shell script reads. Only
-// simple commands that read files and redirect nothing count, so edits, listings, and
-// commands that merely mention a SKILL.md path are ignored. Each skill is reported once.
+// skillsFromShellCommand returns the skills whose SKILL.md a shell script reads from the
+// beginning. Only pipelines whose first stage reads files and redirects nothing count, so
+// edits, listings, and commands that merely mention a SKILL.md path are ignored. A pipeline
+// with a stage that skips the start of its input, such as `nl FILE | sed -n '120,300p'`,
+// continues an earlier load and is ignored too. Each skill is reported once.
 func skillsFromShellCommand(script string) []SkillInvocation {
 	var skills []SkillInvocation
 	seen := map[string]bool{}
-	for _, segment := range shellSeparator.Split(script, -1) {
-		fields := strings.Fields(segment)
+	for _, command := range shellCommandSeparator.Split(script, -1) {
+		stages := strings.Split(command, "|")
+		fields := strings.Fields(stages[0])
 		if len(fields) == 0 || !shellReadCommands[path.Base(trimShellQuotes(fields[0]))] {
 			continue
 		}
-		if strings.ContainsAny(segment, "<>") || editsInPlace(fields) || continuesRead(fields) {
+		if strings.ContainsAny(command, "<>") || editsInPlace(fields) || pipelineContinuesRead(stages) {
 			continue
 		}
 		for _, field := range fields[1:] {
@@ -81,6 +84,21 @@ func skillsFromShellCommand(script string) []SkillInvocation {
 		}
 	}
 	return skills
+}
+
+// pipelineContinuesRead reports whether any stage of a pipeline drops the start of the
+// file: a sed range starting past line 1, or tail.
+func pipelineContinuesRead(stages []string) bool {
+	for _, stage := range stages {
+		fields := strings.Fields(stage)
+		if len(fields) == 0 {
+			continue
+		}
+		if continuesRead(fields) || path.Base(trimShellQuotes(fields[0])) == "tail" {
+			return true
+		}
+	}
+	return false
 }
 
 // editsInPlace reports whether a sed command rewrites its files (-i, -i.bak, --in-place).

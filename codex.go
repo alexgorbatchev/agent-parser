@@ -548,11 +548,24 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			}
 
 		case "token_count":
-			if evt.Info != nil || evt.RateLimits != nil {
-				var info rawCodexTokenCountInfo
-				if evt.Info != nil {
-					info = *evt.Info
+			resetAtPtr, retrySecPtr := selectCodexRateLimitReset(evt.RateLimits, ts)
+			if p != nil {
+				p.mu.Lock()
+				if resetAtPtr != nil {
+					p.rateLimitResetAt = resetAtPtr
+					p.retryAfterSeconds = retrySecPtr
+				} else if codexQuotaAvailable(evt.RateLimits) {
+					p.rateLimitResetAt = nil
+					p.retryAfterSeconds = nil
+				} else if p.rateLimitResetAt != nil && *p.rateLimitResetAt <= ts {
+					p.rateLimitResetAt = nil
+					p.retryAfterSeconds = nil
 				}
+				p.mu.Unlock()
+			}
+			// Quota-only updates do not establish that a turn has completed.
+			if evt.Info != nil {
+				info := *evt.Info
 				last := info.LastTokenUsage
 				totalUsage := info.TotalTokenUsage
 
@@ -578,9 +591,6 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 					CacheWrite: 0,
 					Reasoning:  chosen.ReasoningTokens,
 					Total:      tot,
-				}
-				if evt.Info == nil {
-					usage = nil
 				}
 
 				var activeModel string
@@ -610,26 +620,6 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				var modelPtr *string
 				if activeModel != "" {
 					modelPtr = stringPtr(activeModel)
-				}
-
-				var resetAtPtr *int64
-				var retrySecPtr *int64
-				if evt.RateLimits != nil {
-					resetAtPtr, retrySecPtr = selectCodexRateLimitReset(evt.RateLimits, ts)
-				}
-				if p != nil {
-					p.mu.Lock()
-					if resetAtPtr != nil {
-						p.rateLimitResetAt = resetAtPtr
-						p.retryAfterSeconds = retrySecPtr
-					} else if codexQuotaAvailable(evt.RateLimits) {
-						p.rateLimitResetAt = nil
-						p.retryAfterSeconds = nil
-					} else if p.rateLimitResetAt != nil && *p.rateLimitResetAt <= ts {
-						p.rateLimitResetAt = nil
-						p.retryAfterSeconds = nil
-					}
-					p.mu.Unlock()
 				}
 
 				events = append(events, ParsedEvent{

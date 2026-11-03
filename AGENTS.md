@@ -8,7 +8,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 - Enforce 90% statement coverage: `just coverage`
 - Typecheck canonical harness schemas: `just typecheck`
 - Lint and verify module hygiene: `just lint`
-- Run all checks (lint, coverage, typecheck): `just check`
+- Run all checks (lint, coverage, typecheck): `just check`; CI runs the same recipe on pull requests and pushes to `main`
 - Format Go source: `just fmt`
 
 ## Key gotchas

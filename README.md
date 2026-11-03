@@ -28,7 +28,7 @@ When tool calls perform file edits or patches, `agent-parser` parses the paramet
 # Prerequisites
 
 - Go 1.26.2 or higher
-- Optional: [Bun](https://bun.sh) (only for running type checks against canonical schema specifications in `docs/harness-logs/`)
+- [Bun](https://bun.sh) for contributors: `just check` typechecks the canonical schema specifications in `docs/harness-logs/` with a pinned TypeScript version. Code that only imports the library does not need Bun.
 
 # Installation
 

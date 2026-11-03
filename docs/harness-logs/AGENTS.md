@@ -26,14 +26,14 @@ This directory contains the canonical TypeScript specifications, schemas, data s
 ## Runnable Validation Commands
 
 ```bash
-# Typecheck all harness log specification files
-bun x tsc --noEmit docs/harness-logs/*.ts
+# Typecheck all harness log specification files with the pinned TypeScript version
+just typecheck
 
 # Typecheck a single harness spec
-bun x tsc --noEmit docs/harness-logs/claude-code.ts
-bun x tsc --noEmit docs/harness-logs/pi.ts
-bun x tsc --noEmit docs/harness-logs/codex.ts
-bun x tsc --noEmit docs/harness-logs/opencode.ts
+just typecheck docs/harness-logs/claude-code.ts
+just typecheck docs/harness-logs/pi.ts
+just typecheck docs/harness-logs/codex.ts
+just typecheck docs/harness-logs/opencode.ts
 ```
 
 ---

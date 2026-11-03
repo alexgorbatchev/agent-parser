@@ -25,9 +25,9 @@ coverage:
         exit 1
     fi
 
-# Typecheck canonical harness log specifications
-typecheck:
-    bun x --package typescript@{{ typescript_version }} tsc --noEmit docs/harness-logs/*.ts
+# Typecheck canonical harness log specifications (all specs, or the given files)
+typecheck *files:
+    bun x --package typescript@{{ typescript_version }} tsc --noEmit {{ if files == "" { "docs/harness-logs/*.ts" } else { files } }}
 
 # Format Go source code
 fmt:

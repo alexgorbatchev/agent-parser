@@ -143,3 +143,66 @@ func TestCodexQuotaOnlySnapshotDoesNotCompleteTurn(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexNativeRateLimitMarkedWindows(t *testing.T) {
+	const now = int64(1792709732000)
+	tests := []struct {
+		name    string
+		windows string
+		reset   int64
+	}{
+		{"exhausted primary before available weekly", `"primary":{"used_percent":100,"window_minutes":300,"resets_at":1792727732},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":1793314532}`, now + 5*60*60*1000},
+		{"exhausted secondary before available primary", `"primary":{"used_percent":20,"resets_at":1793314532},"secondary":{"used_percent":101,"resets_at":1792727732}`, now + 5*60*60*1000},
+		{"both exhausted use later reset", `"primary":{"used_percent":100,"resets_at":1792727732},"secondary":{"used_percent":100,"resets_at":1793314532}`, now + 7*24*60*60*1000},
+		{"marker only uses later reset", `"primary":{"used_percent":99.5,"resets_at":1792727732},"secondary":{"used_percent":20,"resets_at":1793314532}`, now + 7*24*60*60*1000},
+		{"marker only with absent primary", `"primary":null,"secondary":{"used_percent":99.5,"resets_at":1792727732}`, now + 5*60*60*1000},
+		{"exhausted reset missing", `"primary":{"used_percent":100,"resets_at":null},"secondary":{"used_percent":20,"resets_at":1793314532}`, 0},
+		{"exhausted reset expired", `"primary":{"used_percent":100,"resets_at":1792709732},"secondary":{"used_percent":20,"resets_at":1793314532}`, 0},
+		{"exhausted reset invalid", `"primary":{"used_percent":100,"resets_at":-1},"secondary":{"used_percent":20,"resets_at":1793314532}`, 0},
+		{"exhausted reset overflows", `"primary":{"used_percent":100,"resets_at":9223372036854775807},"secondary":{"used_percent":20,"resets_at":1793314532}`, 0},
+		{"marker only without windows", `"primary":null,"secondary":null`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limits := `{` + tt.windows + `,"rate_limit_reached_type":"rate_limit_reached"}`
+			for _, source := range []string{"usage snapshot", "quota-only cache", "error snapshot"} {
+				t.Run(source, func(t *testing.T) {
+					p := NewCodexParser()
+					payload := `"type":"token_count","info":{},"rate_limits":` + limits
+					switch source {
+					case "error snapshot":
+						payload = `"type":"error","codex_error_info":"RateLimitExceeded","message":"limit reached","rate_limits":` + limits
+					case "quota-only cache":
+						payload = `"type":"token_count","info":null,"rate_limits":` + limits
+					}
+					line := `{"timestamp":"2026-10-22T22:55:32Z","type":"event_msg","payload":{` + payload + `}}`
+					events, err := p.ParseLine([]byte(line))
+					eventTime := now
+					if source == "quota-only cache" {
+						if err != nil || len(events) != 0 {
+							t.Fatalf("quota-only snapshot = %v, %v; want no event", events, err)
+						}
+						events, err = p.ParseLine([]byte(`{"timestamp":"2026-10-22T22:55:34Z","type":"event_msg","payload":{"type":"error","codex_error_info":"RateLimitExceeded","message":"limit reached"}}`))
+						eventTime += 2000
+					}
+					if err != nil || len(events) != 1 {
+						t.Fatalf("ParseLine = %v, %v; want one event", events, err)
+					}
+					data := events[0].Data
+					if tt.reset == 0 {
+						if data.RateLimitResetAt != nil || data.RetryAfterSeconds != nil {
+							t.Fatalf("unexpected reset metadata: %+v", data)
+						}
+						return
+					}
+					if data.RateLimitResetAt == nil || data.RetryAfterSeconds == nil {
+						t.Fatalf("missing reset metadata: %+v", data)
+					}
+					if *data.RateLimitResetAt != tt.reset || *data.RetryAfterSeconds != (tt.reset-eventTime)/1000 {
+						t.Fatalf("reset = %d, retry = %d; want %d, %d", *data.RateLimitResetAt, *data.RetryAfterSeconds, tt.reset, (tt.reset-eventTime)/1000)
+					}
+				})
+			}
+		})
+	}
+}

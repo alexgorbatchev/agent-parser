@@ -20,9 +20,19 @@ func selectCodexRateLimitReset(limits *rawCodexRateLimits, nowMs int64) (*int64,
 	if limits == nil {
 		return nil, nil
 	}
+	windows := []*rawCodexRateLimitWindow{limits.Primary, limits.Secondary}
+	var exhausted bool
+	for _, window := range windows {
+		if window != nil && window.UsedPercent >= 100 {
+			exhausted = true
+		}
+	}
+	// The reached marker describes the snapshot, not each window. Only use it
+	// to select windows when their percentages do not identify exhaustion.
+	markerOnly := limits.RateLimitReachedType != nil && !exhausted
 	var resetAt int64
-	for _, window := range []*rawCodexRateLimitWindow{limits.Primary, limits.Secondary} {
-		if window == nil || (window.UsedPercent < 100 && limits.RateLimitReachedType == nil) || window.ResetsAt == nil {
+	for _, window := range windows {
+		if window == nil || (window.UsedPercent < 100 && !markerOnly) || window.ResetsAt == nil {
 			continue
 		}
 		seconds := *window.ResetsAt

@@ -174,16 +174,49 @@ export interface ICodexTokenBreakdown {
 }
 
 /**
- * Rate limit snapshot reported in token count events.
+ * Native RateLimitSnapshot reported in token count events.
+ * Source: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs
  */
 export interface ICodexRateLimits {
-  readonly limit_requests?: number;
-  readonly remaining_requests?: number;
-  readonly reset_requests?: string;
-  readonly limit_tokens?: number;
-  readonly remaining_tokens?: number;
-  readonly reset_tokens?: string;
+  readonly limit_id?: string | null;
+  readonly limit_name?: string | null;
+  readonly normal_model_slug?: string | null;
+  readonly primary?: ICodexRateLimitWindow | null;
+  readonly secondary?: ICodexRateLimitWindow | null;
+  readonly credits?: ICodexCreditsSnapshot | null;
+  readonly individual_limit?: ICodexSpendControlLimitSnapshot | null;
+  readonly spend_control_reached?: boolean | null;
+  readonly plan_type?: string | null;
+  readonly rate_limit_reached_type?: CodexRateLimitReachedType | null;
 }
+
+export interface ICodexRateLimitWindow {
+  /** Percentage consumed; values at or above 100 indicate exhaustion. */
+  readonly used_percent: number;
+  readonly window_minutes?: number | null;
+  /** Unix seconds, converted to milliseconds in normalized reset metadata. */
+  readonly resets_at?: number | null;
+}
+
+export interface ICodexCreditsSnapshot {
+  readonly has_credits: boolean;
+  readonly unlimited: boolean;
+  readonly balance?: string | null;
+}
+
+export interface ICodexSpendControlLimitSnapshot {
+  readonly limit: string;
+  readonly used: string;
+  readonly remaining_percent: number;
+  readonly resets_at: number;
+}
+
+export type CodexRateLimitReachedType =
+  | "rate_limit_reached"
+  | "workspace_owner_credits_depleted"
+  | "workspace_member_credits_depleted"
+  | "workspace_owner_usage_limit_reached"
+  | "workspace_member_usage_limit_reached";
 
 /**
  * Token usage report emitted in `token_count` event messages.
@@ -389,8 +422,8 @@ export interface ICodexReasoningPayload {
 
 export interface ICodexTokenCountPayload {
   readonly type: "token_count";
-  readonly info: ICodexTokenCountInfo;
-  readonly rate_limits?: ICodexRateLimits;
+  readonly info: ICodexTokenCountInfo | null;
+  readonly rate_limits?: ICodexRateLimits | null;
 }
 
 export interface ICodexTaskStartedPayload {

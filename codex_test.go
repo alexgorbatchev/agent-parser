@@ -3,19 +3,18 @@ package parser
 import (
 	"encoding/json"
 	"testing"
-	"time"
 )
 
 func TestParseCodexRolloutPath(t *testing.T) {
 	tests := []struct {
-		name        string
-		path        string
-		wantYear    string
-		wantMonth   string
-		wantDay     string
-		wantTS      string
-		wantSessID  string
-		wantErr     bool
+		name       string
+		path       string
+		wantYear   string
+		wantMonth  string
+		wantDay    string
+		wantTS     string
+		wantSessID string
+		wantErr    bool
 	}{
 		{
 			name:       "standard date-partitioned unix path",
@@ -514,7 +513,7 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("token_count with both reset_requests and reset_tokens selects max duration", func(t *testing.T) {
+	t.Run("token_count with both primary reset and secondary reset selects max duration", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -527,12 +526,14 @@ func TestParseCodexLine(t *testing.T) {
 					"model_context_window": 128000
 				},
 				"rate_limits": {
-					"limit_requests": 500,
-					"remaining_requests": 490,
-					"reset_requests": "10ms",
-					"limit_tokens": 100000,
-					"remaining_tokens": 0,
-					"reset_tokens": "60s"
+					"primary": {
+						"used_percent": 25,
+						"resets_at": 1781280524
+					},
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280583
+					}
 				}
 			}
 		}`
@@ -572,8 +573,14 @@ func TestParseCodexLine(t *testing.T) {
 				"message": "Rate limit exceeded",
 				"codex_error_info": "RateLimitExceeded",
 				"rate_limits": {
-					"reset_requests": "10ms",
-					"reset_tokens": "2m"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280524
+					},
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280643
+					}
 				}
 			}
 		}`
@@ -606,9 +613,10 @@ func TestParseCodexLine(t *testing.T) {
 					"model_context_window": 128000
 				},
 				"rate_limits": {
-					"limit_requests": 500,
-					"remaining_requests": 0,
-					"reset_requests": "45s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280568
+					}
 				}
 			}
 		}`
@@ -620,7 +628,7 @@ func TestParseCodexLine(t *testing.T) {
 			t.Errorf("expected RetryAfterSeconds = 45, got %v", evs[0].Data.RetryAfterSeconds)
 		}
 		if evs[0].Data.RateLimitResetAt == nil {
-			t.Errorf("expected RateLimitResetAt to be populated from reset_requests")
+			t.Errorf("expected RateLimitResetAt to be populated from primary reset")
 		}
 	})
 
@@ -682,50 +690,6 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("parseCodexRateLimitReset variants", func(t *testing.T) {
-		nowMs := int64(1700000000000)
-
-		// 1. Duration string
-		resetAt, sec := parseCodexRateLimitReset("30s", nowMs)
-		if resetAt == nil || *resetAt != nowMs+30000 || sec == nil || *sec != 30 {
-			t.Errorf("failed duration: resetAt=%v, sec=%v", resetAt, sec)
-		}
-
-		// 2. Numeric seconds
-		resetAt, sec = parseCodexRateLimitReset("60", nowMs)
-		if resetAt == nil || *resetAt != nowMs+60000 || sec == nil || *sec != 60 {
-			t.Errorf("failed numeric: resetAt=%v, sec=%v", resetAt, sec)
-		}
-
-		// 3. RFC3339
-		rfcStr := "2026-06-12T16:08:43Z"
-		parsedT, _ := time.Parse(time.RFC3339, rfcStr)
-		resetAt, sec = parseCodexRateLimitReset(rfcStr, nowMs)
-		expectedSec := (parsedT.UnixMilli() - nowMs) / 1000
-		if resetAt == nil || *resetAt != parsedT.UnixMilli() || sec == nil || *sec != expectedSec {
-			t.Errorf("failed RFC3339: resetAt=%v, sec=%v", resetAt, sec)
-		}
-
-		// 4. RFC3339Nano
-		rfcNanoStr := "2026-06-12T16:08:43.123456789Z"
-		parsedNanoT, _ := time.Parse(time.RFC3339Nano, rfcNanoStr)
-		resetAt, sec = parseCodexRateLimitReset(rfcNanoStr, nowMs)
-		expectedNanoSec := (parsedNanoT.UnixMilli() - nowMs) / 1000
-		if resetAt == nil || *resetAt != parsedNanoT.UnixMilli() || sec == nil || *sec != expectedNanoSec {
-			t.Errorf("failed RFC3339Nano: resetAt=%v, sec=%v", resetAt, sec)
-		}
-
-		// 5. Empty and invalid
-		resetAt, sec = parseCodexRateLimitReset("", nowMs)
-		if resetAt != nil || sec != nil {
-			t.Errorf("expected nil for empty")
-		}
-		resetAt, sec = parseCodexRateLimitReset("invalid-string", nowMs)
-		if resetAt != nil || sec != nil {
-			t.Errorf("expected nil for invalid")
-		}
-	})
-
 	t.Run("ParseCodexLine is stateless and does not persist state across calls", func(t *testing.T) {
 		tokenLine := `{
 			"type": "event_msg",
@@ -737,8 +701,10 @@ func TestParseCodexLine(t *testing.T) {
 					"last_token_usage": {"total_tokens": 100, "prompt_tokens": 80, "completion_tokens": 20}
 				},
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"reset_tokens": "60s"
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280583
+					}
 				}
 			}
 		}`
@@ -784,7 +750,10 @@ func TestParseCodexLine(t *testing.T) {
 				"message": "Rate limit exceeded on request",
 				"codex_error_info": "RateLimitExceeded",
 				"rate_limits": {
-					"reset_tokens": "20s"
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280543
+					}
 				}
 			}
 		}`
@@ -808,10 +777,14 @@ func TestParseCodexLine(t *testing.T) {
 					"total_token_usage": { "total_tokens": 100 }
 				},
 				"rate_limits": {
-					"remaining_tokens": 50000,
-					"remaining_requests": 200,
-					"reset_tokens": "30s",
-					"reset_requests": "10s"
+					"primary": {
+						"used_percent": 25,
+						"resets_at": 1781280533
+					},
+					"secondary": {
+						"used_percent": 25,
+						"resets_at": 1781280553
+					}
 				}
 			}
 		}`
@@ -827,7 +800,7 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("token_count extracts reset metadata when remaining_tokens is 0", func(t *testing.T) {
+	t.Run("token_count extracts reset metadata when secondary is exhausted", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -838,10 +811,14 @@ func TestParseCodexLine(t *testing.T) {
 					"total_token_usage": { "total_tokens": 100 }
 				},
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"remaining_requests": 200,
-					"reset_tokens": "30s",
-					"reset_requests": "10s"
+					"primary": {
+						"used_percent": 25,
+						"resets_at": 1781280533
+					},
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280553
+					}
 				}
 			}
 		}`
@@ -854,7 +831,7 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("token_count extracts reset metadata when remaining_requests is 0", func(t *testing.T) {
+	t.Run("token_count extracts reset metadata when primary is exhausted", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -865,10 +842,14 @@ func TestParseCodexLine(t *testing.T) {
 					"total_token_usage": { "total_tokens": 100 }
 				},
 				"rate_limits": {
-					"remaining_tokens": 50000,
-					"remaining_requests": 0,
-					"reset_tokens": "10s",
-					"reset_requests": "45s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280568
+					},
+					"secondary": {
+						"used_percent": 25,
+						"resets_at": 1781280533
+					}
 				}
 			}
 		}`
@@ -881,7 +862,7 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("token_count isolates exhausted quota: tokens exhausted ignores requests reset", func(t *testing.T) {
+	t.Run("token_count isolates exhausted quota: secondary exhausted ignores primary reset", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -892,10 +873,14 @@ func TestParseCodexLine(t *testing.T) {
 					"total_token_usage": { "total_tokens": 100 }
 				},
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"remaining_requests": 200,
-					"reset_tokens": "15s",
-					"reset_requests": "2h"
+					"primary": {
+						"used_percent": 25,
+						"resets_at": 1781287723
+					},
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280538
+					}
 				}
 			}
 		}`
@@ -904,11 +889,11 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("failed parse: evs=%v err=%v", evs, err)
 		}
 		if evs[0].Data.RetryAfterSeconds == nil || *evs[0].Data.RetryAfterSeconds != 15 {
-			t.Errorf("expected RetryAfterSeconds == 15 (ignored non-exhausted 2h requests reset), got %v", evs[0].Data.RetryAfterSeconds)
+			t.Errorf("expected RetryAfterSeconds == 15 (ignored non-exhausted 2h primary reset), got %v", evs[0].Data.RetryAfterSeconds)
 		}
 	})
 
-	t.Run("token_count isolates exhausted quota: requests exhausted ignores tokens reset", func(t *testing.T) {
+	t.Run("token_count isolates exhausted quota: primary exhausted ignores secondary reset", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -919,10 +904,14 @@ func TestParseCodexLine(t *testing.T) {
 					"total_token_usage": { "total_tokens": 100 }
 				},
 				"rate_limits": {
-					"remaining_tokens": 50000,
-					"remaining_requests": 0,
-					"reset_tokens": "3h",
-					"reset_requests": "20s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280543
+					},
+					"secondary": {
+						"used_percent": 25,
+						"resets_at": 1781291323
+					}
 				}
 			}
 		}`
@@ -931,11 +920,11 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("failed parse: evs=%v err=%v", evs, err)
 		}
 		if evs[0].Data.RetryAfterSeconds == nil || *evs[0].Data.RetryAfterSeconds != 20 {
-			t.Errorf("expected RetryAfterSeconds == 20 (ignored non-exhausted 3h tokens reset), got %v", evs[0].Data.RetryAfterSeconds)
+			t.Errorf("expected RetryAfterSeconds == 20 (ignored non-exhausted 3h secondary reset), got %v", evs[0].Data.RetryAfterSeconds)
 		}
 	})
 
-	t.Run("selectCodexRateLimitReset takes max of resetRequests and resetTokens", func(t *testing.T) {
+	t.Run("selectCodexRateLimitReset takes max of primary reset and secondary reset", func(t *testing.T) {
 		parser := NewCodexParser()
 		line := `{
 			"type": "event_msg",
@@ -944,9 +933,14 @@ func TestParseCodexLine(t *testing.T) {
 				"type": "error",
 				"message": "Rate limit exceeded",
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"reset_requests": "60s",
-					"reset_tokens": "15s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280583
+					},
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280538
+					}
 				}
 			}
 		}`
@@ -955,7 +949,7 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("failed parse: evs=%v err=%v", evs, err)
 		}
 		if evs[0].Data.RetryAfterSeconds == nil || *evs[0].Data.RetryAfterSeconds != 60 {
-			t.Errorf("expected max(60, 15) = 60s even when remaining_tokens=0, got %v", evs[0].Data.RetryAfterSeconds)
+			t.Errorf("expected max(60, 15) = 60s even when secondary used_percent=100, got %v", evs[0].Data.RetryAfterSeconds)
 		}
 	})
 
@@ -969,7 +963,10 @@ func TestParseCodexLine(t *testing.T) {
 				"type": "error",
 				"message": "Rate limit reached",
 				"rate_limits": {
-					"reset_tokens": "10s"
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280010
+					}
 				}
 			}
 		}`
@@ -1043,8 +1040,10 @@ func TestParseCodexLine(t *testing.T) {
 					"last_token_usage": {"total_tokens": 100, "prompt_tokens": 80, "completion_tokens": 20}
 				},
 				"rate_limits": {
-					"remaining_requests": 0,
-					"reset_requests": "45s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280565
+					}
 				}
 			}
 		}`
@@ -1102,8 +1101,10 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 100
 				},
 				"rate_limits": {
-					"remaining_requests": 0,
-					"reset_requests": "60s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280540
+					}
 				}
 			}
 		}`
@@ -1259,7 +1260,7 @@ func TestParseCodexLine(t *testing.T) {
 	t.Run("turn with positive quota availability restores quota and clears cached rate limit metadata", func(t *testing.T) {
 		parser := NewCodexParser()
 
-		// 1. Initial event with exhausted requests sets cached rate limit metadata
+		// 1. Initial event with exhausted primary window sets cached rate limit metadata
 		tokenCountLine := `{
 			"type": "event_msg",
 			"timestamp": "2026-06-12T16:08:00.000Z",
@@ -1269,8 +1270,10 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 100
 				},
 				"rate_limits": {
-					"remaining_requests": 0,
-					"reset_requests": "60s"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280540
+					}
 				}
 			}
 		}`
@@ -1292,8 +1295,12 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 150
 				},
 				"rate_limits": {
-					"remaining_requests": 250,
-					"remaining_tokens": 50000
+					"primary": {
+						"used_percent": 25
+					},
+					"secondary": {
+						"used_percent": 25
+					}
 				}
 			}
 		}`
@@ -1335,7 +1342,7 @@ func TestParseCodexLine(t *testing.T) {
 	t.Run("cached rate limit not wiped when one quota remains exhausted", func(t *testing.T) {
 		parser := NewCodexParser()
 
-		// 1. Initial event with exhausted tokens sets cached rate limit metadata
+		// 1. Initial event with exhausted secondary window sets cached rate limit metadata
 		initialLine := `{
 			"type": "event_msg",
 			"timestamp": "2026-06-12T16:08:00.000Z",
@@ -1345,8 +1352,10 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 100
 				},
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"reset_tokens": "60s"
+					"secondary": {
+						"used_percent": 100,
+						"resets_at": 1781280540
+					}
 				}
 			}
 		}`
@@ -1358,7 +1367,7 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("expected initial token_count to set RateLimitResetAt")
 		}
 
-		// 2. Subsequent turn where remaining_tokens == 0 and remaining_requests == 100
+		// 2. Subsequent turn where secondary used_percent == 100 and primary used_percent == 25
 		// must NOT wipe cached rate limit metadata
 		turnLine := `{
 			"type": "event_msg",
@@ -1369,8 +1378,12 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 150
 				},
 				"rate_limits": {
-					"remaining_tokens": 0,
-					"remaining_requests": 100
+					"primary": {
+						"used_percent": 25
+					},
+					"secondary": {
+						"used_percent": 100
+					}
 				}
 			}
 		}`
@@ -1395,14 +1408,14 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("RateLimitExceeded parse failed: evs=%v err=%v", evs3, err)
 		}
 		if evs3[0].Data.RateLimitResetAt == nil {
-			t.Fatalf("expected RateLimitExceeded to inherit cached RateLimitResetAt when remaining_tokens == 0 and remaining_requests == 100")
+			t.Fatalf("expected RateLimitExceeded to inherit cached RateLimitResetAt when secondary used_percent == 100 and primary used_percent == 25")
 		}
 	})
 
 	t.Run("turn_end with expired rate limit reset does not attach expired metadata", func(t *testing.T) {
 		parser := NewCodexParser()
 
-		// Token count at 16:08:00 with reset_requests at 16:07:00 (in the past <= ts)
+		// Token count at 16:08:00 with primary reset at 16:07:00 (in the past <= ts)
 		line := `{
 			"type": "event_msg",
 			"timestamp": "2026-06-12T16:08:00.000Z",
@@ -1412,8 +1425,10 @@ func TestParseCodexLine(t *testing.T) {
 					"total_tokens": 100
 				},
 				"rate_limits": {
-					"remaining_requests": 0,
-					"reset_requests": "2026-06-12T16:07:00.000Z"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280420
+					}
 				}
 			}
 		}`
@@ -1439,10 +1454,14 @@ func TestParseCodexLine(t *testing.T) {
 				"message": "Rate limit exceeded",
 				"codex_error_info": "RateLimitExceeded",
 				"rate_limits": {
-					"remaining_requests": 0,
-					"reset_requests": "15s",
-					"remaining_tokens": 100000,
-					"reset_tokens": "24h"
+					"primary": {
+						"used_percent": 100,
+						"resets_at": 1781280538
+					},
+					"secondary": {
+						"used_percent": 25,
+						"resets_at": 1781366923
+					}
 				}
 			}
 		}`
@@ -1831,61 +1850,21 @@ func TestParseCodexLine(t *testing.T) {
 	})
 }
 
-func TestParseCodexRateLimitReset(t *testing.T) {
-	nowMs := int64(1700000000000)
-
-	// empty
-	resetAt, sec := parseCodexRateLimitReset("", nowMs)
-	if resetAt != nil || sec != nil {
-		t.Errorf("expected nil for empty")
-	}
-
-	// numeric string
-	resetAt, sec = parseCodexRateLimitReset("30", nowMs)
-	if resetAt == nil || *resetAt != nowMs+30000 || sec == nil || *sec != 30 {
-		t.Errorf("numeric string parse failed: %v, %v", resetAt, sec)
-	}
-
-	// duration string
-	resetAt, sec = parseCodexRateLimitReset("1m", nowMs)
-	if resetAt == nil || *resetAt != nowMs+60000 || sec == nil || *sec != 60 {
-		t.Errorf("duration string parse failed: %v, %v", resetAt, sec)
-	}
-
-	// RFC3339
-	resetAt, sec = parseCodexRateLimitReset("2023-11-14T22:14:20Z", nowMs)
-	if resetAt == nil || sec == nil {
-		t.Errorf("RFC3339 parse failed")
-	}
-
-	// RFC3339Nano past
-	resetAt, sec = parseCodexRateLimitReset("2020-01-01T00:00:00.000Z", nowMs)
-	if resetAt == nil || sec == nil || *sec != 0 {
-		t.Errorf("past RFC3339Nano parse failed: %v, %v", resetAt, sec)
-	}
-
-	// invalid
-	resetAt, sec = parseCodexRateLimitReset("invalid-reset-string", nowMs)
-	if resetAt != nil || sec != nil {
-		t.Errorf("expected nil for invalid")
-	}
-}
-
 func TestCodexParser_NormalizedFileModification(t *testing.T) {
 	t.Run("apply_patch produces normalized FileModification", func(t *testing.T) {
 		patchText := "diff --git a/internal/calc.go b/internal/calc.go\n--- a/internal/calc.go\n+++ b/internal/calc.go\n@@ -1,3 +1,3 @@\n-const X = 1\n+const X = 2\n"
 		payload := map[string]interface{}{
-			"type": "custom_tool_call",
-			"name": "apply_patch",
+			"type":    "custom_tool_call",
+			"name":    "apply_patch",
 			"call_id": "call_patch_1",
 			"input": map[string]interface{}{
 				"patch": patchText,
 			},
 		}
 		raw := map[string]interface{}{
-			"type": "response_item",
+			"type":      "response_item",
 			"timestamp": "2026-06-12T16:08:40.000Z",
-			"payload": payload,
+			"payload":   payload,
 		}
 		b, _ := json.Marshal(raw)
 		evs, err := ParseCodexLine(b)
@@ -1915,18 +1894,18 @@ func TestCodexParser_NormalizedFileModification(t *testing.T) {
 
 	t.Run("write_file produces normalized FileModification", func(t *testing.T) {
 		payload := map[string]interface{}{
-			"type": "custom_tool_call",
-			"name": "write_file",
+			"type":    "custom_tool_call",
+			"name":    "write_file",
 			"call_id": "call_write_1",
 			"input": map[string]interface{}{
-				"path": "test.txt",
+				"path":    "test.txt",
 				"content": "hello world",
 			},
 		}
 		raw := map[string]interface{}{
-			"type": "response_item",
+			"type":      "response_item",
 			"timestamp": "2026-06-12T16:08:41.000Z",
-			"payload": payload,
+			"payload":   payload,
 		}
 		b, _ := json.Marshal(raw)
 		evs, err := ParseCodexLine(b)

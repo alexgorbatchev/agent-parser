@@ -12,10 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 var (
@@ -188,15 +186,6 @@ type rawCodexTokenCountInfo struct {
 	TotalTokenUsage    rawCodexTokenBreakdown `json:"total_token_usage"`
 	LastTokenUsage     rawCodexTokenBreakdown `json:"last_token_usage"`
 	ModelContextWindow int64                  `json:"model_context_window"`
-}
-
-type rawCodexRateLimits struct {
-	LimitRequests     *int64 `json:"limit_requests,omitempty"`
-	RemainingRequests *int64 `json:"remaining_requests,omitempty"`
-	ResetRequests     string `json:"reset_requests,omitempty"`
-	LimitTokens       *int64 `json:"limit_tokens,omitempty"`
-	RemainingTokens   *int64 `json:"remaining_tokens,omitempty"`
-	ResetTokens       string `json:"reset_tokens,omitempty"`
 }
 
 type rawCodexEventMsgPayload struct {
@@ -559,9 +548,13 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			}
 
 		case "token_count":
-			if evt.Info != nil {
-				last := evt.Info.LastTokenUsage
-				totalUsage := evt.Info.TotalTokenUsage
+			if evt.Info != nil || evt.RateLimits != nil {
+				var info rawCodexTokenCountInfo
+				if evt.Info != nil {
+					info = *evt.Info
+				}
+				last := info.LastTokenUsage
+				totalUsage := info.TotalTokenUsage
 
 				chosen := last
 				if chosen.TotalTokens == 0 && chosen.PromptTokens == 0 && chosen.CompletionTokens == 0 {
@@ -586,6 +579,9 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 					Reasoning:  chosen.ReasoningTokens,
 					Total:      tot,
 				}
+				if evt.Info == nil {
+					usage = nil
+				}
 
 				var activeModel string
 				var activeCw int64
@@ -596,7 +592,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 					p.mu.Unlock()
 				}
 
-				cw := evt.Info.ModelContextWindow
+				cw := info.ModelContextWindow
 				if cw == 0 {
 					cw = activeCw
 				}
@@ -619,21 +615,14 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 				var resetAtPtr *int64
 				var retrySecPtr *int64
 				if evt.RateLimits != nil {
-					resetAtPtr, retrySecPtr = selectCodexRateLimitReset(evt.RateLimits, ts, false)
-				}
-				if resetAtPtr != nil && *resetAtPtr <= ts {
-					resetAtPtr = nil
-					retrySecPtr = nil
+					resetAtPtr, retrySecPtr = selectCodexRateLimitReset(evt.RateLimits, ts)
 				}
 				if p != nil {
 					p.mu.Lock()
 					if resetAtPtr != nil {
 						p.rateLimitResetAt = resetAtPtr
 						p.retryAfterSeconds = retrySecPtr
-					} else if evt.RateLimits != nil &&
-						(evt.RateLimits.RemainingTokens == nil || *evt.RateLimits.RemainingTokens > 0) &&
-						(evt.RateLimits.RemainingRequests == nil || *evt.RateLimits.RemainingRequests > 0) &&
-						(evt.RateLimits.RemainingTokens != nil || evt.RateLimits.RemainingRequests != nil) {
+					} else if codexQuotaAvailable(evt.RateLimits) {
 						p.rateLimitResetAt = nil
 						p.retryAfterSeconds = nil
 					} else if p.rateLimitResetAt != nil && *p.rateLimitResetAt <= ts {
@@ -758,21 +747,16 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 			var lineResetAt *int64
 			var lineRetrySec *int64
 			if evt.RateLimits != nil {
-				rAt, rSec := selectCodexRateLimitReset(evt.RateLimits, ts, true)
-				if rAt != nil && *rAt > ts {
+				rAt, rSec := selectCodexRateLimitReset(evt.RateLimits, ts)
+				if rAt != nil {
 					lineResetAt = rAt
 					lineRetrySec = rSec
 				}
 				if p != nil {
 					p.mu.Lock()
 					if rAt != nil {
-						if *rAt > ts {
-							p.rateLimitResetAt = rAt
-							p.retryAfterSeconds = rSec
-						} else {
-							p.rateLimitResetAt = nil
-							p.retryAfterSeconds = nil
-						}
+						p.rateLimitResetAt = rAt
+						p.retryAfterSeconds = rSec
 					} else if p.rateLimitResetAt != nil && *p.rateLimitResetAt <= ts {
 						p.rateLimitResetAt = nil
 						p.retryAfterSeconds = nil
@@ -1037,76 +1021,4 @@ func extractInt(v interface{}) *int {
 		return &i
 	}
 	return nil
-}
-
-func selectCodexRateLimitReset(rateLimits *rawCodexRateLimits, nowMs int64, isError bool) (*int64, *int64) {
-	if rateLimits == nil {
-		return nil, nil
-	}
-	var evalRequests bool
-	var evalTokens bool
-
-	if isError {
-		evalRequests = rateLimits.ResetRequests != "" && (rateLimits.RemainingRequests == nil || *rateLimits.RemainingRequests <= 0)
-		evalTokens = rateLimits.ResetTokens != "" && (rateLimits.RemainingTokens == nil || *rateLimits.RemainingTokens <= 0)
-	} else {
-		evalRequests = rateLimits.ResetRequests != "" && rateLimits.RemainingRequests != nil && *rateLimits.RemainingRequests <= 0
-		evalTokens = rateLimits.ResetTokens != "" && rateLimits.RemainingTokens != nil && *rateLimits.RemainingTokens <= 0
-	}
-	if !evalRequests && !evalTokens {
-		return nil, nil
-	}
-	var maxResetAt *int64
-	var maxSec *int64
-
-	if evalRequests {
-		maxResetAt, maxSec = parseCodexRateLimitReset(rateLimits.ResetRequests, nowMs)
-	}
-	if evalTokens {
-		tokResetAt, tokSec := parseCodexRateLimitReset(rateLimits.ResetTokens, nowMs)
-		if tokResetAt != nil {
-			if maxResetAt == nil || *tokResetAt > *maxResetAt {
-				maxResetAt = tokResetAt
-				maxSec = tokSec
-			}
-		}
-	}
-	return maxResetAt, maxSec
-}
-
-func parseCodexRateLimitReset(resetStr string, nowMs int64) (*int64, *int64) {
-	trimmed := strings.TrimSpace(resetStr)
-	if trimmed == "" {
-		return nil, nil
-	}
-	// 1. Try Go duration (e.g. "45s", "1m30s", "500ms")
-	if dur, err := time.ParseDuration(trimmed); err == nil {
-		sec := int64(dur.Seconds())
-		resetAt := nowMs + dur.Milliseconds()
-		return &resetAt, &sec
-	}
-	// 2. Try numeric seconds (e.g. "45" or "45.0")
-	if val, err := strconv.ParseFloat(trimmed, 64); err == nil && val > 0 {
-		sec := int64(val)
-		resetAt := nowMs + int64(val*1000)
-		return &resetAt, &sec
-	}
-	// 3. Try RFC3339 / RFC3339Nano
-	if t, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
-		resetAt := t.UnixMilli()
-		sec := (resetAt - nowMs) / 1000
-		if sec < 0 {
-			sec = 0
-		}
-		return &resetAt, &sec
-	}
-	if t, err := time.Parse(time.RFC3339, trimmed); err == nil {
-		resetAt := t.UnixMilli()
-		sec := (resetAt - nowMs) / 1000
-		if sec < 0 {
-			sec = 0
-		}
-		return &resetAt, &sec
-	}
-	return nil, nil
 }

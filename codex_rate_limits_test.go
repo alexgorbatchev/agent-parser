@@ -32,6 +32,12 @@ func TestCodexNativeRateLimitSnapshots(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			line := fmt.Sprintf(`{"timestamp":"2026-10-22T22:55:32Z","type":"event_msg","payload":{"type":"token_count","info":%s,"rate_limits":%s}}`, tt.info, tt.limits)
 			events, err := NewCodexParser().ParseLine([]byte(line))
+			if tt.info == "null" {
+				if err != nil || len(events) != 0 {
+					t.Fatalf("quota-only snapshot fabricated events: %v, %v", events, err)
+				}
+				return
+			}
 			if err != nil || len(events) != 1 {
 				t.Fatalf("ParseLine = %v, %v; want one event", events, err)
 			}
@@ -43,11 +49,7 @@ func TestCodexNativeRateLimitSnapshots(t *testing.T) {
 			} else if data.RateLimitResetAt == nil || *data.RateLimitResetAt != tt.reset || data.RetryAfterSeconds == nil || *data.RetryAfterSeconds != (tt.reset-now)/1000 {
 				t.Fatalf("reset = %v, retry = %v; want %d, %d", data.RateLimitResetAt, data.RetryAfterSeconds, tt.reset, (tt.reset-now)/1000)
 			}
-			if tt.info == "null" {
-				if data.Usage != nil {
-					t.Fatalf("snapshot without usage fabricated usage: %+v", data.Usage)
-				}
-			} else if data.Usage == nil || data.Usage.Total != 120 {
+			if data.Usage == nil || data.Usage.Total != 120 {
 				t.Fatalf("usage lost: %+v", data.Usage)
 			}
 		})
@@ -75,6 +77,12 @@ func TestCodexNativeRateLimitRecovery(t *testing.T) {
 			}
 			for i, line := range lines {
 				events, err := p.ParseLine([]byte(line))
+				if i < 2 {
+					if err != nil || len(events) != 0 {
+						t.Fatalf("line %d: quota-only snapshot fabricated events: %v, %v", i, events, err)
+					}
+					continue
+				}
 				if err != nil || len(events) != 1 {
 					t.Fatalf("line %d: ParseLine = %v, %v", i, events, err)
 				}
@@ -103,5 +111,35 @@ func TestCodexNativeRateLimitFractionalRetry(t *testing.T) {
 	}
 	if got := events[0].Data.RateLimitResetAt; got == nil || *got != time.Date(2026, 10, 22, 22, 55, 33, 0, time.UTC).UnixMilli() {
 		t.Fatalf("reset = %v; want Unix milliseconds", got)
+	}
+}
+
+func TestCodexQuotaOnlySnapshotDoesNotCompleteTurn(t *testing.T) {
+	for _, used := range []int{9, 100} {
+		t.Run(fmt.Sprintf("used_%d", used), func(t *testing.T) {
+			p := NewCodexParser()
+			start := `{"timestamp":"2026-10-22T22:55:31Z","type":"event_msg","payload":{"type":"task_started"}}`
+			events, err := p.ParseLine([]byte(start))
+			if err != nil || len(events) != 1 || events[0].EventType != "turn_start" {
+				t.Fatalf("task start = %v, %v", events, err)
+			}
+			quota := fmt.Sprintf(`{"timestamp":"2026-10-22T22:55:32Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":%d,"resets_at":1792709792}}}}`, used)
+			events, err = p.ParseLine([]byte(quota))
+			if err != nil || len(events) != 0 {
+				t.Fatalf("quota-only update fabricated events: %v, %v", events, err)
+			}
+			failure := `{"timestamp":"2026-10-22T22:55:34Z","type":"event_msg","payload":{"type":"error","codex_error_info":"RateLimitExceeded","message":"limit reached"}}`
+			events, err = p.ParseLine([]byte(failure))
+			if err != nil || len(events) != 1 || events[0].EventType != "error" {
+				t.Fatalf("error = %v, %v", events, err)
+			}
+			if used == 100 {
+				if events[0].Data.RetryAfterSeconds == nil || *events[0].Data.RetryAfterSeconds != 58 {
+					t.Fatalf("quota update was not cached: %+v", events[0].Data)
+				}
+			} else if events[0].Data.RateLimitResetAt != nil || events[0].Data.RetryAfterSeconds != nil {
+				t.Fatalf("available quota cached a reset: %+v", events[0].Data)
+			}
+		})
 	}
 }

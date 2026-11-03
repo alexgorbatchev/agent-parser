@@ -92,6 +92,20 @@ func main() {
 | `OpenOpencodeDB` | `(dbPath string) (*OpencodeDB, error)` | Opens an OpenCode SQLite database in read-only mode |
 | `NormalizeFileModification` | `(toolName string, toolInput map[string]interface{}) *FileModification` | Normalizes tool parameters into canonical diffs |
 
+### Activity Timestamps
+
+Each function accepts one native JSONL record and returns `(timestamp int64, found bool, err error)`. The timestamp is Unix milliseconds from the record's outer `timestamp` string.
+
+| Export | Activity records |
+| :--- | :--- |
+| `ClaudeCodeActivityTimestamp` | `user`, `assistant`, `attachment`, `system`, and `progress` |
+| `PiActivityTimestamp` | `message`, `custom_message`, `compaction`, and `branch_summary` |
+| `CodexActivityTimestamp` | `turn_context` and the `event_msg` / `response_item` payload variants in the [canonical Codex schema](docs/harness-logs/codex.ts) |
+
+Metadata and unknown record types return `found=false`. Missing, null, or empty timestamps also return `found=false`; malformed JSON and invalid timestamps on activity records return an error. Valid timestamps require an RFC3339 timezone and may contain fractional seconds. Numeric timestamps and zone-less strings are rejected. An epoch timestamp returns `0, true, nil`.
+
+Pi's nested message timestamp describes message creation, and Codex task payload timestamps describe lifecycle boundaries; neither overrides the outer record time. These functions read one record without changing parser state, scanning files, or substituting the current time. Callers choose traversal order and handle records without usable activity times.
+
 ### Core Types
 
 ```go

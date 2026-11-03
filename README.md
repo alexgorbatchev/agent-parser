@@ -27,7 +27,7 @@ When tool calls perform file edits or patches, `agent-parser` parses the paramet
 
 # Prerequisites
 
-- Go 1.22 or higher
+- Go 1.26.2 or higher
 - Optional: [Bun](https://bun.sh) (only for running type checks against canonical schema specifications in `docs/harness-logs/`)
 
 # Installation

@@ -462,3 +462,42 @@ func TestDiscoverOpencodeDatabaseSelection(t *testing.T) {
 		}
 	})
 }
+
+// cancelAfterFirstCheck reports cancellation from its second Err call on, so discovery
+// finishes the first harness and stops before the next one.
+type cancelAfterFirstCheck struct {
+	context.Context
+	checks int
+}
+
+func (c *cancelAfterFirstCheck) Err() error {
+	c.checks++
+	if c.checks > 1 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestDiscoverSessionsSortsPartialResultsOnCancel(t *testing.T) {
+	isolateHarnessEnv(t)
+	home := buildHarnessHome(t)
+	// opencode.db is read before opencode-local.db, but sorts after it.
+	createOpencodeFixtureDB(t, filepath.Join(home, ".local/share/opencode/opencode-local.db"))
+
+	ctx := &cancelAfterFirstCheck{Context: context.Background()}
+	sources, err := DiscoverSessions(ctx, DiscoverOptions{Home: home, Harnesses: []Harness{HarnessOpencode, HarnessCodex}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(sources) != 4 {
+		t.Fatalf("got %d sources, want the 4 OpenCode rows found before cancellation: %+v", len(sources), sources)
+	}
+	for i := 1; i < len(sources); i++ {
+		if sources[i-1].Path > sources[i].Path {
+			t.Fatalf("partial results are not sorted: %+v", sources)
+		}
+	}
+	if !strings.HasSuffix(sources[0].Path, "opencode-local.db") {
+		t.Errorf("first source = %s, want the channel database first", sources[0].Path)
+	}
+}

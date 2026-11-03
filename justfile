@@ -1,6 +1,9 @@
 # Minimum statement coverage the package must keep, enforced by `just coverage`
 min_coverage := "90"
 
+# TypeScript compiler used by `just typecheck`
+typescript_version := "7.0.2"
+
 # Default recipe: list available tasks
 default:
     @just --list
@@ -24,7 +27,7 @@ coverage:
 
 # Typecheck canonical harness log specifications
 typecheck:
-    bun x tsc --noEmit docs/harness-logs/*.ts
+    bun x --package typescript@{{ typescript_version }} tsc --noEmit docs/harness-logs/*.ts
 
 # Format Go source code
 fmt:

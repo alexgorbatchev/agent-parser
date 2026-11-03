@@ -27,6 +27,8 @@ jobs:
       - uses: extractions/setup-just@v4
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
 
       - uses: golangci/golangci-lint-action@v9
         with:

@@ -46,6 +46,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/alexgorbatchev/agent-parser"
@@ -60,6 +61,7 @@ func main() {
 
 	parser := parser.NewClaudeCodeParser()
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1<<20), 64<<20) // transcript lines often exceed bufio's 64 KiB default
 
 	for scanner.Scan() {
 		events, err := parser.ParseLine(scanner.Bytes())
@@ -77,6 +79,9 @@ func main() {
 			}
 			fmt.Println()
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
 	}
 }
 ```
@@ -131,9 +136,13 @@ for _, source := range sources {
 	}
 	codex := parser.NewCodexParser()
 	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 1<<20), 64<<20) // transcript lines often exceed bufio's 64 KiB default
 	for scanner.Scan() {
 		events, _ := codex.ParseLine(scanner.Bytes())
 		_ = events
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("reading %s: %v", source.Path, err)
 	}
 	_ = reader.Close()
 }

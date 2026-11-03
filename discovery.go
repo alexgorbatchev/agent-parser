@@ -32,8 +32,9 @@ func SupportedHarnesses() []Harness {
 	return []Harness{HarnessClaudeCode, HarnessCodex, HarnessPi, HarnessOpencode}
 }
 
-// SessionSource is one session stored on disk. Discovery reads directory entries and
-// OpenCode's session table only; it never parses transcript contents.
+// SessionSource is one session stored on disk. Discovery reads directory entries, OpenCode's
+// session table, and the first record of each Pi subagent run, which holds the run's session
+// ID; it does not parse any other transcript contents.
 type SessionSource struct {
 	Harness Harness `json:"harness"`
 	// SessionID is the harness's session identifier. For a Claude Code subagent it is the
@@ -102,6 +103,7 @@ func DiscoverSessions(ctx context.Context, opts DiscoverOptions) ([]SessionSourc
 	var errs []error
 	for _, harness := range harnesses {
 		if err := ctx.Err(); err != nil {
+			sortSessionSources(sources)
 			return sources, err
 		}
 		var found []SessionSource
@@ -123,10 +125,14 @@ func DiscoverSessions(ctx context.Context, opts DiscoverOptions) ([]SessionSourc
 			errs = append(errs, fmt.Errorf("discovering %s sessions: %w", harness, err))
 		}
 	}
+	sortSessionSources(sources)
+	return sources, errors.Join(errs...)
+}
+
+func sortSessionSources(sources []SessionSource) {
 	slices.SortFunc(sources, func(a, b SessionSource) int {
 		return strings.Compare(string(a.Harness)+"\x00"+a.Path+"\x00"+a.SessionID, string(b.Harness)+"\x00"+b.Path+"\x00"+b.SessionID)
 	})
-	return sources, errors.Join(errs...)
 }
 
 // OpenTranscript opens a transcript for reading, decompressing zstd-compressed .zst files.

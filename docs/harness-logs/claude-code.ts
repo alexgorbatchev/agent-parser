@@ -45,7 +45,8 @@
  *    - Workflow subagents: `<projects-store>/<slug(cwd)>/<sessionId>/subagents/workflows/<runId>/agent-<agentId>.jsonl`,
  *      next to a `journal.jsonl` of workflow events (first record `{"type":"launched"}`) that is not a transcript.
  *    - Legacy layout: `<projects-store>/<slug(cwd)>/agent-<agentId>.jsonl` (filtered by sessionId)
- *    - Each subagent transcript may have an `agent-<agentId>.meta.json` sibling. A fork's meta holds
+ *    - Claude Code writes an `agent-<agentId>.meta.json` sibling for every transcript under `subagents/`
+ *      (the legacy layout has none). A fork's meta holds
  *      `{"agentType":"fork","isFork":true,"toolUseId":"<spawning tool_use id>","parentAgentId":"<id>"}`;
  *      `parentAgentId` is absent when the session itself spawned the fork. A copied fork transcript
  *      starts with copies of the parent's records that keep their original `timestamp` (the `uuid`

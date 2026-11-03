@@ -164,13 +164,8 @@ func TestParseOpencodePartData(t *testing.T) {
 	}
 }
 
-func setupTestOpencodeDB(t *testing.T) *OpencodeDB {
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("opening in-memory sqlite: %v", err)
-	}
-
-	schema := `
+// opencodeTestSchema creates the OpenCode tables the parser reads.
+const opencodeTestSchema = `
 		CREATE TABLE project (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -223,6 +218,14 @@ func setupTestOpencodeDB(t *testing.T) *OpencodeDB {
 			time_created INTEGER NOT NULL
 		);
 	`
+
+func setupTestOpencodeDB(t *testing.T) *OpencodeDB {
+	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("opening in-memory sqlite: %v", err)
+	}
+
+	schema := opencodeTestSchema
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		t.Fatalf("creating test schema: %v", err)

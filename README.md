@@ -10,7 +10,8 @@
 - **Rate limit and error detection**: Captures HTTP status codes, rate limit resets, retry delays, and tool execution failures.
 - **Native recaps and questions**: Emits Claude Code `system/away_summary` text as `summary` events. Codex `request_user_input`, `request_user_input_async`, and completed `AgentMessage` questions produce `question_prompt` events; ordinary completed agent messages produce `agent_message` events.
 - **Skill invocations**: `EventData.Skills` lists the agent skills an event invokes, with the skill name, whether the model or the user invoked it, and its path when recorded. Model loads appear on the tool call that loads the skill (Claude Code `Skill`, OpenCode `skill`, Pi `read` of a `SKILL.md` from line 1). User invocations appear on the user turn that runs one (Claude Code slash commands, Pi `/skill:name`). Codex records neither on an existing event: its `$name` mentions and shell reads of skills' `SKILL.md` files emit separate `skill_invoked` events.
-- **Zero CGo overhead**: Reads OpenCode SQLite databases through the pure Go `modernc.org/sqlite` driver, so consumers can cross-compile with `CGO_ENABLED=0`.
+- **Session discovery**: `DiscoverSessions` lists the sessions each harness stores on disk, read-only, using the harness's own locations and environment overrides: Claude Code projects with subagents, Codex sessions and `archived_sessions`, Pi sessions with forks, and OpenCode session rows. `OpenTranscript` reads a transcript and transparently decompresses Codex's zstd `.jsonl.zst` rollouts.
+- **Zero CGo overhead**: Reads OpenCode SQLite databases through the pure Go `modernc.org/sqlite` driver and zstd transcripts through `github.com/klauspost/compress/zstd`, so consumers can cross-compile with `CGO_ENABLED=0`.
 
 # How It Works
 

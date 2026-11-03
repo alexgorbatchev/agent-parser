@@ -507,6 +507,7 @@ export interface ICodexCompletedCommandExecution {
   readonly aggregated_output?: string;
   readonly duration?: unknown;
   readonly process_id?: string | null;
+  /** "agent", "user_shell" (a `!` command the user ran; not a model load), "unified_exec_startup", or "unified_exec_interaction". */
   readonly source?: string;
   readonly parsed_cmd?: readonly ICodexParsedCommand[];
 }
@@ -521,8 +522,10 @@ export interface ICodexParsedCommand {
 
 /**
  * User message completion observed in Codex 0.166.0. A `$name` skill mention adds a
- * `skill` content item; Codex also injects the skill as a user `response_item` message
- * starting with `<skill>\n<name>NAME</name>\n<path>PATH</path>`, which parsers count.
+ * `skill` content item, which parsers report as a user skill invocation. Codex also injects
+ * the skill as a user `response_item` message starting with `<skill>`, but forked child
+ * rollouts replay that message while omitting `item_completed` records, so only the
+ * content item is counted.
  */
 export interface ICodexCompletedUserMessage {
   readonly type: "UserMessage";

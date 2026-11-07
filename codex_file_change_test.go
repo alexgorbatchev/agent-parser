@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -77,4 +78,52 @@ func describeFileModification(mod *FileModification) string {
 		return desc + " " + *mod.Content
 	}
 	return desc + fmt.Sprintf(" hunks=%d", len(mod.Hunks))
+}
+
+func TestCodexFileChangeKeepsHeaderLikeHunkLines(t *testing.T) {
+	// Codex's unified_diff has hunks only. A deleted "-- comment" line reads
+	// "--- comment" and an added "++ b/x" line reads "+++ b/x"; both are hunk
+	// content, not file headers.
+	diff := "@@ -1,3 +1,3 @@\n select 1;\n--- drop legacy index\n+++ b/keep this line\n select 2;\n@@ -10 +10 @@\n-a\n+b\n"
+	line := `{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"call_patch","changes":{"/work/q.sql":{"type":"update","unified_diff":` + jsonString(t, diff) + `,"move_path":null}},"status":"completed"}}}`
+	evs, err := ParseCodexLine([]byte(line))
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("ParseCodexLine = %+v, %v", evs, err)
+	}
+	mod := evs[0].Data.FileModification
+	if mod.FilePath != "/work/q.sql" || len(mod.Hunks) != 2 {
+		t.Fatalf("modification = %+v; want two hunks on /work/q.sql", mod)
+	}
+	var got []string
+	for _, l := range mod.Hunks[0].Lines {
+		got = append(got, fmt.Sprintf("%s old=%s new=%s %q", l.Type, lineNumber(l.OldLineNumber), lineNumber(l.NewLineNumber), l.Content))
+	}
+	want := []string{
+		`ctx old=1 new=1 "select 1;"`,
+		`del old=2 new=- "-- drop legacy index"`,
+		`add old=- new=2 "++ b/keep this line"`,
+		`ctx old=3 new=3 "select 2;"`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("hunk lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if l := mod.Hunks[1].Lines; len(l) != 2 || *l[0].OldLineNumber != 10 || *l[1].NewLineNumber != 10 {
+		t.Errorf("second hunk = %+v; want the del and add at line 10", l)
+	}
+}
+
+func lineNumber(n *int) string {
+	if n == nil {
+		return "-"
+	}
+	return fmt.Sprint(*n)
+}
+
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

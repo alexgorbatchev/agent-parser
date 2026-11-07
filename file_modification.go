@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-var hunkHeaderRegex = regexp.MustCompile(`@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+var hunkHeaderRegex = regexp.MustCompile(`@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
 // NormalizeFileModification parses harness-specific file operations into a canonical FileModification.
 func NormalizeFileModification(toolName string, toolInput map[string]interface{}) *FileModification {
@@ -165,6 +165,14 @@ func splitLines(s string) []string {
 	return lines
 }
 
+// atoiOr parses s, or returns fallback when s is empty or not a number.
+func atoiOr(s string, fallback int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return fallback
+}
+
 func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification {
 	lines := splitLines(patchText)
 	filePath := fallbackPath
@@ -172,24 +180,31 @@ func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification 
 	var currentHunk *DiffHunk
 	oldLine := 1
 	newLine := 1
+	// oldLeft and newLeft count the lines the current hunk header still
+	// promises. While either is positive every line is hunk content, so a
+	// deleted "-- x" line ("--- x") is not mistaken for a file header.
+	oldLeft, newLeft := 0, 0
 
 	for _, rawLine := range lines {
-		if strings.HasPrefix(rawLine, "diff --git ") {
-			parts := strings.Fields(rawLine)
-			if len(parts) >= 4 {
-				bPart := parts[3]
-				filePath = strings.TrimPrefix(bPart, "b/")
+		inHunk := currentHunk != nil && (oldLeft > 0 || newLeft > 0)
+		if !inHunk {
+			if strings.HasPrefix(rawLine, "diff --git ") {
+				parts := strings.Fields(rawLine)
+				if len(parts) >= 4 {
+					bPart := parts[3]
+					filePath = strings.TrimPrefix(bPart, "b/")
+				}
+				continue
 			}
-			continue
+			if strings.HasPrefix(rawLine, "+++ b/") {
+				filePath = strings.TrimSpace(strings.TrimPrefix(rawLine, "+++ b/"))
+				continue
+			}
+			if strings.HasPrefix(rawLine, "--- ") {
+				continue
+			}
 		}
-		if strings.HasPrefix(rawLine, "+++ b/") {
-			filePath = strings.TrimSpace(strings.TrimPrefix(rawLine, "+++ b/"))
-			continue
-		}
-		if strings.HasPrefix(rawLine, "--- ") {
-			continue
-		}
-		if strings.HasPrefix(rawLine, "@@ ") {
+		if strings.HasPrefix(rawLine, "@@ ") && !inHunk {
 			if currentHunk != nil {
 				hunks = append(hunks, *currentHunk)
 			}
@@ -198,14 +213,12 @@ func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification 
 				Header: header,
 				Lines:  []DiffLine{},
 			}
-			matches := hunkHeaderRegex.FindStringSubmatch(rawLine)
-			if len(matches) >= 3 {
-				if o, err := strconv.Atoi(matches[1]); err == nil {
-					oldLine = o
-				}
-				if n, err := strconv.Atoi(matches[2]); err == nil {
-					newLine = n
-				}
+			oldLeft, newLeft = 0, 0
+			if matches := hunkHeaderRegex.FindStringSubmatch(rawLine); matches != nil {
+				oldLine = atoiOr(matches[1], oldLine)
+				oldLeft = atoiOr(matches[2], 1)
+				newLine = atoiOr(matches[3], newLine)
+				newLeft = atoiOr(matches[4], 1)
 			}
 			continue
 		}
@@ -222,6 +235,7 @@ func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification 
 				Content:       rawLine[1:],
 			})
 			oldLine++
+			oldLeft--
 		} else if strings.HasPrefix(rawLine, "+") {
 			num := newLine
 			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
@@ -230,6 +244,7 @@ func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification 
 				Content:       rawLine[1:],
 			})
 			newLine++
+			newLeft--
 		} else if strings.HasPrefix(rawLine, " ") || rawLine == "" {
 			var content string
 			if len(rawLine) > 0 {
@@ -245,6 +260,8 @@ func parseUnifiedPatch(patchText string, fallbackPath string) *FileModification 
 			})
 			oldLine++
 			newLine++
+			oldLeft--
+			newLeft--
 		}
 	}
 

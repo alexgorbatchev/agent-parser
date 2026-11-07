@@ -1,5 +1,7 @@
 package parser
 
+import "encoding/json"
+
 // The helpers below are nil-safe so the stateless ParseCodexLine path can share
 // every record handler with the stateful CodexParser.
 
@@ -292,4 +294,45 @@ func (p *CodexParser) isRecordedCall(callID string) bool {
 	defer p.mu.Unlock()
 	_, ok := p.callIDs[callID]
 	return ok
+}
+
+// recordCallOutcome keeps the outcome a completed item recorded for a call.
+func (p *CodexParser) recordCallOutcome(callID string, failed *bool) {
+	if failed == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.callOutcomes == nil {
+		p.callOutcomes = make(map[string]bool)
+	}
+	p.callOutcomes[callID] = *failed
+}
+
+// takeCallOutcome returns and forgets the outcome recorded for a call.
+func (p *CodexParser) takeCallOutcome(callID string) *bool {
+	if p == nil || callID == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	failed, ok := p.callOutcomes[callID]
+	if !ok {
+		return nil
+	}
+	delete(p.callOutcomes, callID)
+	return &failed
+}
+
+// recordItemOutcome keeps the status outcome of a completed item that
+// repeats a recorded call, such as a patch's FileChange.
+func (p *CodexParser) recordItemOutcome(kind string, raw json.RawMessage) {
+	if !p.isPaginated() {
+		return
+	}
+	var item rawCodexToolItem
+	if json.Unmarshal(raw, &item) != nil || !p.isRecordedCall(item.ID) {
+		return
+	}
+	p.recordCallOutcome(item.ID, codexItemOutcome(kind, item))
 }

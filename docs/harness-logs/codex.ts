@@ -574,7 +574,7 @@ export interface ICodexCompletedMcpToolCall {
   readonly server: string;
   readonly tool: string;
   readonly arguments?: Readonly<Record<string, unknown>>;
-  readonly status?: CodexItemStatus;
+  readonly status: CodexItemStatus;
   /** MCP `CallToolResult`; `isError` marks a failed call. */
   readonly result?: { readonly content?: readonly unknown[]; readonly isError?: boolean } | null;
   readonly error?: unknown;
@@ -588,7 +588,11 @@ export interface ICodexCompletedWebSearch {
   readonly action?: Readonly<Record<string, unknown>>;
 }
 
-/** Extension tool such as `web.search` or `image.generate`, named by `kind`. */
+/**
+ * Extension tool named by `kind`, such as `web.search`, `clock.sleep` or
+ * `image_gen.generation`. Fields other than the outcome (`status`, `result`, `results`,
+ * `failure`) describe the call; an image generation `result` is the image as base64.
+ */
 export interface ICodexCompletedExtension {
   readonly type: "Extension";
   readonly id: string;
@@ -599,6 +603,7 @@ export interface ICodexCompletedExtension {
   readonly results?: readonly unknown[];
   readonly result?: unknown;
   readonly failure?: unknown;
+  readonly [field: string]: unknown;
 }
 
 export interface ICodexCompletedImageView {

@@ -253,18 +253,12 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64, startedAt *int64, p 
 		return nil, fmt.Errorf("unmarshaling completed item: %w", err)
 	}
 	switch header.Type {
-	case "CommandExecution":
-		skills, err := parseCodexCommandExecution(raw, ts)
-		if err != nil {
-			return nil, err
-		}
-		calls, err := parseCodexToolItem(header.Type, raw, ts, startedAt, p)
-		return append(calls, skills...), err
-	case "McpToolCall", "WebSearch", "ImageView", "Extension", "DynamicToolCall":
+	case "CommandExecution", "McpToolCall", "WebSearch", "ImageView", "Extension", "DynamicToolCall", "CollabAgentToolCall":
 		return parseCodexToolItem(header.Type, raw, ts, startedAt, p)
 	case "UserMessage":
 		return parseCodexUserMessage(raw, ts, p)
 	case "FileChange":
+		p.recordItemOutcome("FileChange", raw)
 		return parseCodexFileChange(raw, ts)
 	}
 	if header.Type != "AgentMessage" {
@@ -357,8 +351,10 @@ type CodexParser struct {
 	turnOpen         bool
 	pendingTurnStart *ParsedEvent
 	// callIDs holds the IDs of tool calls recorded as response items, whose
-	// completed items repeat them.
-	callIDs map[string]struct{}
+	// completed items repeat them. callOutcomes holds the outcome such an item
+	// recorded, for the call's result that follows it.
+	callIDs      map[string]struct{}
+	callOutcomes map[string]bool
 	// paginated is set when the rollout's own session_meta declares paginated
 	// history, whose completed UserMessage items are the prompt source.
 	// userImages holds the images of the user response_item on line
@@ -388,6 +384,7 @@ func (p *CodexParser) Reset() {
 	p.turnOpen = false
 	p.pendingTurnStart = nil
 	p.callIDs = nil
+	p.callOutcomes = nil
 	p.paginated = false
 	p.line = 0
 	p.userImages = nil
@@ -473,12 +470,6 @@ func extractInt(v interface{}) *int {
 	return nil
 }
 
-type rawCodexCommandExecution struct {
-	Command  []string `json:"command"`
-	ExitCode *int     `json:"exit_code"`
-	Source   string   `json:"source"`
-}
-
 type rawCodexUserMessage struct {
 	Content []struct {
 		Type     string `json:"type"`
@@ -550,30 +541,22 @@ func parseCodexUserMessageSkills(raw json.RawMessage, ts int64) ([]ParsedEvent, 
 	}}, nil
 }
 
-// parseCodexCommandExecution emits a skill_invoked event when a completed shell command
+// codexCommandSkills emits a skill_invoked event when a completed shell command
 // read one or more skills' SKILL.md files. Codex has no skill tool: the model loads a
 // skill by reading its file, directly or from code mode, and every executed command is
 // recorded as a CommandExecution item.
-func parseCodexCommandExecution(raw json.RawMessage, ts int64) ([]ParsedEvent, error) {
-	var item rawCodexCommandExecution
-	if err := json.Unmarshal(raw, &item); err != nil {
-		return nil, fmt.Errorf("unmarshaling completed command execution: %w", err)
-	}
+func codexCommandSkills(item rawCodexToolItem, ts int64) []ParsedEvent {
 	// user_shell marks a command the user ran with !, which is not a model loading a skill.
 	if item.ExitCode == nil || *item.ExitCode != 0 || len(item.Command) == 0 || item.Source == "user_shell" {
-		return nil, nil
+		return nil
 	}
-	script := strings.Join(item.Command, " ")
-	if len(item.Command) >= 3 && (item.Command[1] == "-lc" || item.Command[1] == "-c") {
-		script = item.Command[2]
-	}
-	skills := skillsFromShellCommand(script)
+	skills := skillsFromShellCommand(codexShellScript(item.Command))
 	if len(skills) == 0 {
-		return nil, nil
+		return nil
 	}
 	return []ParsedEvent{{
 		EventType: "skill_invoked",
 		Timestamp: ts,
 		Data:      EventData{Role: stringPtr("assistant"), Skills: skills},
-	}}, nil
+	}}
 }

@@ -16,7 +16,7 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) (
 	case "function_call", "custom_tool_call":
 		return codexToolCallEvents(resp, ts, p), nil
 	case "function_call_output", "custom_tool_call_output":
-		return codexToolOutputEvents(resp, ts), nil
+		return codexToolOutputEvents(resp, ts, p), nil
 	case "message":
 		return codexMessageEvents(resp, ts, p), nil
 	case "reasoning":
@@ -112,7 +112,14 @@ func codexToolInput(resp rawCodexResponseItemPayload) map[string]interface{} {
 	return inputMap
 }
 
-func codexToolOutputEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedEvent {
+// codexToolOutputEvents reports a tool result. Without a status header, the
+// outcome comes from the completed item Codex recorded for the call, if any.
+func codexToolOutputEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexParser) []ParsedEvent {
+	recorded := p.takeCallOutcome(resp.CallID)
+	failed := codexToolFailed(resp.Output.head)
+	if failed == nil {
+		failed = recorded
+	}
 	return []ParsedEvent{{
 		EventType: "tool_result",
 		Timestamp: ts,
@@ -120,7 +127,7 @@ func codexToolOutputEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedE
 			Role:       stringPtr("toolResult"),
 			ToolCallID: optionalString(resp.CallID),
 			ToolOutput: stringPtr(resp.Output.text),
-			IsError:    codexToolFailed(resp.Output.head),
+			IsError:    failed,
 			Images:     resp.Output.images,
 		},
 	}}

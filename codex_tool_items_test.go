@@ -44,10 +44,13 @@ func TestCodexNestedToolItems(t *testing.T) {
 			`web_search action=map[query:go generics type:search] query="go generics" | out=<nil> err=nil`},
 		{"extension",
 			`{"type":"Extension","kind":"web.search","id":"exec-8","query":"https://example.test","action":{"type":"openPage","url":"https://example.test"},"results":[{"type":"text_result"}]}`,
-			`web.search action=map[type:openPage url:https://example.test] kind="web.search" query="https://example.test" | out=[{"type":"text_result"}] err=nil`},
+			`web.search action=map[type:openPage url:https://example.test] query="https://example.test" | out=[{"type":"text_result"}] err=nil`},
 		{"extension failure",
-			`{"type":"Extension","kind":"image.generate","id":"exec-9","failure":{"message":"blocked"}}`,
-			`image.generate kind="image.generate" | out=<nil> err=true`},
+			`{"type":"Extension","kind":"image_gen.generation","id":"exec-9","status":"failed","revisedPrompt":"A red square","result":null,"failure":{"message":"blocked"},"savedPath":null}`,
+			`image_gen.generation revisedPrompt="A red square" | out=<nil> err=true`},
+		{"extension without an outcome",
+			`{"type":"Extension","kind":"clock.sleep","id":"exec-12","durationMs":30000}`,
+			`clock.sleep durationMs=30000 | out=<nil> err=nil`},
 		{"dynamic tool",
 			`{"type":"DynamicToolCall","id":"exec-10","tool":"workspace_info","arguments":{},"status":"completed","content_items":[{"type":"inputText","text":"{}"}],"success":false}`,
 			`workspace_info | out=[{"type":"inputText","text":"{}"}] err=true`},
@@ -156,4 +159,82 @@ func describeToolItem(call, result EventData) string {
 		}
 	}
 	return strings.Join(parts, " ") + " | out=" + out + " err=" + describeBool(result.IsError)
+}
+
+func TestCodexImageGenerationResultIsAnImage(t *testing.T) {
+	p := NewCodexParser()
+	if _, err := p.ParseLine([]byte(codexPaginatedMeta)); err != nil {
+		t.Fatal(err)
+	}
+	// A 1x1 PNG.
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+	item := `{"type":"Extension","kind":"image_gen.generation","id":"exec-13","status":"completed","revisedPrompt":"A dot","result":"` + png + `","transparentBackground":true,"failure":null,"savedPath":"/home/dev/.codex/generated_images/a.png"}`
+	evs, err := p.ParseLine([]byte(codexItemLine(item)))
+	if err != nil || len(evs) != 2 {
+		t.Fatalf("events = %+v, %v", evs, err)
+	}
+	result := evs[1].Data
+	if len(result.Images) != 1 || result.Images[0].MediaType != "image/png" || result.Images[0].Data != png || *result.IsError {
+		t.Errorf("result = %+v; want the PNG as an image", result)
+	}
+	if evs[0].Data.ToolInput["savedPath"] != "/home/dev/.codex/generated_images/a.png" || evs[0].Data.ToolInput["result"] != nil {
+		t.Errorf("input = %+v; want the call fields without the result", evs[0].Data.ToolInput)
+	}
+}
+
+func TestCodexRepeatedItemOutcomeReachesTheResult(t *testing.T) {
+	tests := []struct {
+		name, item, output string
+		want               string
+	}{
+		{"failed collaboration call",
+			`{"type":"CollabAgentToolCall","id":"call_1","tool":"spawn_agent","status":"failed","sender_thread_id":"t","receiver_thread_ids":[],"receiver_agents":[],"agents_states":{}}`,
+			`"collab spawn failed: agent thread limit reached"`, "true"},
+		{"completed patch",
+			`{"type":"FileChange","id":"call_1","changes":{},"status":"completed"}`,
+			`"Success. Updated the following files:\nM a.go\n"`, "false"},
+		{"status header wins",
+			`{"type":"CommandExecution","id":"call_1","command":["ls"],"status":"failed","exit_code":2}`,
+			`"Chunk ID: x\nWall time: 0.1 seconds\nProcess exited with code 0\nOutput:\n"`, "false"},
+		{"item without an outcome",
+			`{"type":"Extension","kind":"clock.sleep","id":"call_1","durationMs":10}`,
+			`"slept"`, "nil"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewCodexParser()
+			lines := []string{
+				codexPaginatedMeta,
+				`{"timestamp":"2026-11-07T10:00:01Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{}","call_id":"call_1"}}`,
+				codexItemLine(tt.item),
+				`{"timestamp":"2026-11-07T10:00:06Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":` + tt.output + `}}`,
+			}
+			var results []EventData
+			for _, line := range lines {
+				evs, err := p.ParseLine([]byte(line))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, ev := range evs {
+					if ev.EventType == "tool_result" {
+						results = append(results, ev.Data)
+					}
+				}
+			}
+			if len(results) != 1 || describeBool(results[0].IsError) != tt.want {
+				t.Errorf("results = %+v; want one result with IsError %s", results, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexUserShellCommandIsNotAToolCall(t *testing.T) {
+	p := NewCodexParser()
+	if _, err := p.ParseLine([]byte(codexPaginatedMeta)); err != nil {
+		t.Fatal(err)
+	}
+	item := `{"type":"CommandExecution","id":"8f1c2d3e-0000-4000-8000-000000000000","command":["/usr/bin/zsh","-lc","git status"],"cwd":"file:///work","source":"user_shell","status":"completed","exit_code":0,"aggregated_output":""}`
+	if evs, err := p.ParseLine([]byte(codexItemLine(item))); err != nil || len(evs) != 0 {
+		t.Errorf("events = %+v, %v; want none for a command the user ran", evs, err)
+	}
 }

@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -16,6 +18,7 @@ type rawCodexToolItem struct {
 	Status string `json:"status"`
 
 	// CommandExecution
+	Source           string   `json:"source"`
 	Command          []string `json:"command"`
 	CWD              string   `json:"cwd"`
 	ExitCode         *int     `json:"exit_code"`
@@ -39,31 +42,49 @@ type rawCodexToolItem struct {
 
 	// ImageView
 	Path string `json:"path"`
+
+	// fields holds the item's raw fields, an extension's input.
+	fields map[string]interface{}
 }
 
 // parseCodexToolItem reports a completed tool item as a tool_call at the
-// item's start and a tool_result at its completion. Items exist only in
-// paginated history; the stateful parser skips items that repeat a tool call
-// it already reported from a response item.
+// item's start and a tool_result at its completion, plus the skills a command
+// read. Tool events come only from the stateful parser on paginated history,
+// the only history with items. An item that repeats a tool call already recorded as a
+// response item emits nothing; its outcome goes to that call's result, which
+// Codex writes after the item.
 func parseCodexToolItem(kind string, raw json.RawMessage, ts int64, startedAt *int64, p *CodexParser) ([]ParsedEvent, error) {
-	if !p.isPaginated() {
-		return nil, nil
-	}
 	var item rawCodexToolItem
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed %s: %w", kind, err)
 	}
+	if err := json.Unmarshal(raw, &item.fields); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed %s: %w", kind, err)
+	}
+	var skills []ParsedEvent
+	if kind == "CommandExecution" {
+		skills = codexCommandSkills(item, ts)
+	}
+	if !p.isPaginated() {
+		return skills, nil
+	}
 	if p.isRecordedCall(item.ID) {
-		return nil, nil
+		p.recordCallOutcome(item.ID, codexItemOutcome(kind, item))
+		return skills, nil
+	}
+	// Collaboration items only repeat collaboration tool calls, and a
+	// user_shell command is one the user ran with !, not an assistant call.
+	if kind == "CollabAgentToolCall" || item.Source == "user_shell" {
+		return skills, nil
 	}
 
-	name, input, output, failed := codexToolItemDetails(kind, item)
+	name, input, output, images := codexToolItemDetails(kind, item)
 	callTS := ts
 	if startedAt != nil && *startedAt > 0 {
 		callTS = *startedAt
 	}
 	callID := optionalString(item.ID)
-	return []ParsedEvent{
+	events := []ParsedEvent{
 		{
 			EventType: "tool_call",
 			Timestamp: callTS,
@@ -81,64 +102,102 @@ func parseCodexToolItem(kind string, raw json.RawMessage, ts int64, startedAt *i
 				Role:       stringPtr("toolResult"),
 				ToolCallID: callID,
 				ToolOutput: output,
-				IsError:    failed,
+				Images:     images,
+				IsError:    codexItemOutcome(kind, item),
 			},
 		},
-	}, nil
+	}
+	return append(events, skills...), nil
 }
 
-func codexToolItemDetails(kind string, item rawCodexToolItem) (name string, input map[string]interface{}, output *string, failed *bool) {
+func codexToolItemDetails(kind string, item rawCodexToolItem) (name string, input map[string]interface{}, output *string, images []Image) {
 	switch kind {
 	case "CommandExecution":
 		input = map[string]interface{}{"command": codexShellScript(item.Command), "argv": item.Command}
 		if cwd := codexItemPath(item.CWD); cwd != "" {
 			input["cwd"] = cwd
 		}
-		return "exec_command", input, item.AggregatedOutput, codexCommandFailed(item)
+		return "exec_command", input, item.AggregatedOutput, nil
 	case "McpToolCall":
-		failed = codexStatusFailed(item.Status)
-		if failed != nil && !*failed && (codexMCPResultIsError(item.Result) || codexJSONPresent(item.Error)) {
-			failed = boolPtr(true)
-		}
 		output = codexJSONText(item.Result)
 		if output == nil {
 			output = codexJSONText(item.Error)
 		}
-		return "mcp__" + item.Server + "__" + item.Tool, codexJSONObject(item.Arguments), output, failed
+		return "mcp__" + item.Server + "__" + item.Tool, codexJSONObject(item.Arguments), output, nil
 	case "DynamicToolCall":
-		if item.Success != nil {
-			failed = boolPtr(!*item.Success)
-		} else {
-			failed = codexStatusFailed(item.Status)
-		}
-		return item.Tool, codexJSONObject(item.Arguments), codexJSONText(item.ContentItems), failed
+		return item.Tool, codexJSONObject(item.Arguments), codexJSONText(item.ContentItems), nil
 	case "WebSearch":
-		return "web_search", codexSearchInput(item), nil, nil
+		input = map[string]interface{}{"query": item.Query}
+		if action := codexJSONObject(item.Action); action != nil {
+			input["action"] = action
+		}
+		return "web_search", input, nil, nil
 	case "Extension":
-		input = codexSearchInput(item)
-		input["kind"] = item.Kind
-		failed = codexStatusFailed(item.Status)
-		if codexJSONPresent(item.Failure) {
-			failed = boolPtr(true)
-		}
-		output = codexJSONText(item.Results)
-		if output == nil {
-			output = codexJSONText(item.Result)
-		}
-		return item.Kind, input, output, failed
+		return item.Kind, codexExtensionInput(item.fields), codexJSONText(item.Results), codexExtensionImages(item)
 	case "ImageView":
 		return "view_image", map[string]interface{}{"path": codexItemPath(item.Path)}, nil, nil
 	}
 	return kind, nil, nil, nil
 }
 
-// codexCommandFailed reads a command's outcome from its exit code, or from its
-// status when it has none.
-func codexCommandFailed(item rawCodexToolItem) *bool {
-	if item.ExitCode != nil {
-		return boolPtr(*item.ExitCode != 0)
+// codexItemOutcome reads whether a completed item failed: from a command's
+// exit code, an MCP result's isError or error, an extension's failure, a
+// dynamic tool's success, or the item status. It is nil when the item
+// records no outcome.
+func codexItemOutcome(kind string, item rawCodexToolItem) *bool {
+	switch kind {
+	case "CommandExecution":
+		if item.ExitCode != nil {
+			return boolPtr(*item.ExitCode != 0)
+		}
+	case "McpToolCall":
+		if codexMCPResultIsError(item.Result) || codexJSONPresent(item.Error) {
+			return boolPtr(true)
+		}
+	case "Extension":
+		if codexJSONPresent(item.Failure) {
+			return boolPtr(true)
+		}
+	case "DynamicToolCall":
+		if item.Success != nil {
+			return boolPtr(!*item.Success)
+		}
 	}
 	return codexStatusFailed(item.Status)
+}
+
+// codexExtensionFields are an extension item's identity and outcome fields;
+// the rest describe the call.
+var codexExtensionFields = map[string]bool{
+	"type": true, "id": true, "kind": true, "status": true,
+	"result": true, "results": true, "failure": true,
+}
+
+func codexExtensionInput(fields map[string]interface{}) map[string]interface{} {
+	input := map[string]interface{}{}
+	for k, v := range fields {
+		if !codexExtensionFields[k] && v != nil {
+			input[k] = v
+		}
+	}
+	return input
+}
+
+// codexExtensionImages returns the image an image generation extension
+// produced: its result is the image as base64.
+func codexExtensionImages(item rawCodexToolItem) []Image {
+	if !strings.HasPrefix(item.Kind, "image_gen.") {
+		return nil
+	}
+	var data string
+	if json.Unmarshal(item.Result, &data) != nil || data == "" {
+		return nil
+	}
+	head, err := base64.StdEncoding.DecodeString(data[:min(len(data), 64)&^3])
+	if err != nil {
+		return nil
+	}
+	return []Image{{MediaType: http.DetectContentType(head), Data: data}}
 }
 
 // codexStatusFailed maps a completed item's status: "completed" succeeded,
@@ -158,17 +217,6 @@ func codexMCPResultIsError(result json.RawMessage) bool {
 		IsError bool `json:"isError"`
 	}
 	return json.Unmarshal(result, &r) == nil && r.IsError
-}
-
-func codexSearchInput(item rawCodexToolItem) map[string]interface{} {
-	input := map[string]interface{}{}
-	if item.Query != "" {
-		input["query"] = item.Query
-	}
-	if action := codexJSONObject(item.Action); action != nil {
-		input["action"] = action
-	}
-	return input
 }
 
 // codexShellScript returns the script of a `shell -lc script` argv, or the

@@ -441,11 +441,11 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 
 	expectedEventTypes := []string{
 		"run_started",
-		"user_prompt",
+		"turn_start",
 		"thinking",
-		"tool_use",
+		"tool_call",
 		"tool_result",
-		"text",
+		"agent_message",
 		"turn_end",
 	}
 
@@ -470,7 +470,7 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 
 	userPrompt := events[1]
 	if userPrompt.Data.Content == nil || *userPrompt.Data.Content != "Please fix the parser tests" {
-		t.Errorf("user_prompt content = %v", userPrompt.Data.Content)
+		t.Errorf("turn_start content = %v", userPrompt.Data.Content)
 	}
 
 	thinking := events[2]
@@ -672,13 +672,13 @@ func TestOpencodeParser_NormalizedFileModification(t *testing.T) {
 		evs := ReconstructSessionEvents(session, messages, parts)
 		var toolCall *ParsedEvent
 		for i := range evs {
-			if evs[i].EventType == "tool_use" {
+			if evs[i].EventType == "tool_call" {
 				toolCall = &evs[i]
 				break
 			}
 		}
 		if toolCall == nil {
-			t.Fatal("expected tool_use event")
+			t.Fatal("expected tool_call event")
 		}
 		fm := toolCall.Data.FileModification
 		if fm == nil {
@@ -719,13 +719,13 @@ func TestOpencodeParser_NormalizedFileModification(t *testing.T) {
 		evs := ReconstructSessionEvents(session, messages, parts)
 		var toolCall *ParsedEvent
 		for i := range evs {
-			if evs[i].EventType == "tool_use" {
+			if evs[i].EventType == "tool_call" {
 				toolCall = &evs[i]
 				break
 			}
 		}
 		if toolCall == nil {
-			t.Fatal("expected tool_use event")
+			t.Fatal("expected tool_call event")
 		}
 		fm := toolCall.Data.FileModification
 		if fm == nil {

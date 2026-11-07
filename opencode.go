@@ -575,7 +575,7 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 			userText := strings.Join(textParts, "\n")
 			if userText != "" {
 				events = append(events, ParsedEvent{
-					EventType: "user_prompt",
+					EventType: "turn_start",
 					Timestamp: msg.TimeCreated,
 					CWD:       cwd,
 					Data: EventData{
@@ -618,7 +618,7 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 				case "text":
 					if p.Data.Text != "" {
 						events = append(events, ParsedEvent{
-							EventType: "text",
+							EventType: "agent_message",
 							Timestamp: partTs,
 							CWD:       cwd,
 							Data: EventData{
@@ -651,7 +651,7 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 							skills = skillsFromToolInput("name", toolInput)
 						}
 						events = append(events, ParsedEvent{
-							EventType: "tool_use",
+							EventType: "tool_call",
 							Timestamp: startTs,
 							CWD:       cwd,
 							Data: EventData{

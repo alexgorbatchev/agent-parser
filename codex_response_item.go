@@ -129,6 +129,9 @@ func codexMessageEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexPars
 	contentStr := extractContentString(resp.Content)
 	switch resp.Role {
 	case "user":
+		if isCodexContextualMessage(resp.Content) {
+			return nil
+		}
 		return p.promptEvents(codexUserPromptEvents(contentStr, codexImages(resp.Content), ts))
 	case "assistant":
 		return codexAgentMessageEvents(contentStr, ts)

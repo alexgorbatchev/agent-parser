@@ -19,7 +19,11 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 	case "item_completed":
 		return parseCodexCompletedItem(evt.Item, ts)
 	case "user_message":
-		return p.promptEvents(codexUserPromptEvents(evt.Message, nil, ts)), nil
+		// Legacy-history rollouts persist this event as a copy of the prompt
+		// already recorded as a user response_item (Session::
+		// record_user_prompt_and_emit_turn_item; rollout policy
+		// persisted_event_msg), so the response_item alone reports the prompt.
+		return nil, nil
 	case "agent_message":
 		return codexAgentMessageEvents(evt.Message, ts), nil
 	case "reasoning":

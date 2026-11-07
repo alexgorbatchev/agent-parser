@@ -297,14 +297,15 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("event_msg user_message with synthetic context filtering", func(t *testing.T) {
+	t.Run("user message with synthetic context filtering", func(t *testing.T) {
 		// Pure synthetic context -> no event
 		syntheticLine := `{
-			"type": "event_msg",
+			"type": "response_item",
 			"timestamp": "2026-06-12T16:08:38.000Z",
 			"payload": {
-				"type": "user_message",
-				"message": "<environment_context>\nOS: Darwin\n</environment_context>"
+				"type": "message",
+				"role": "user",
+				"content": [{"type": "input_text", "text": "<environment_context>\nOS: Darwin\n</environment_context>"}]
 			}
 		}`
 		evs1, err := ParseCodexLine([]byte(syntheticLine))
@@ -317,11 +318,12 @@ func TestParseCodexLine(t *testing.T) {
 
 		// User prompt with environment context header
 		mixedLine := `{
-			"type": "event_msg",
+			"type": "response_item",
 			"timestamp": "2026-06-12T16:08:39.000Z",
 			"payload": {
-				"type": "user_message",
-				"message": "<environment_context>\nCWD: /repo\n</environment_context>\n\nImplement streaming tests"
+				"type": "message",
+				"role": "user",
+				"content": [{"type": "input_text", "text": "<environment_context>\nCWD: /repo\n</environment_context>\n\nImplement streaming tests"}]
 			}
 		}`
 		evs2, err := ParseCodexLine([]byte(mixedLine))
@@ -2203,6 +2205,28 @@ func TestCodexTurnBoundaries(t *testing.T) {
 			},
 			want: []string{"turn_start:First", "turn_start:Second"},
 		},
+		{
+			// Legacy history persists a user_message event copying each prompt
+			// recorded as a response_item.
+			name: "legacy history turn",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t8","started_at":1794045600}`),
+				userMsg("01", "Fix it"),
+				line("01", "event_msg", `{"type":"user_message","message":"Fix it","images":[],"local_images":[],"text_elements":[]}`),
+				userMsg("02", "And test it"),
+				line("02", "event_msg", `{"type":"user_message","message":"And test it","images":[],"local_images":[],"text_elements":[]}`),
+				line("03", "event_msg", `{"type":"task_complete","turn_id":"t8","completed_at":1794045603}`),
+			},
+			want: []string{"turn_start@1794045600000:Fix it", "message_absorbed:And test it", "turn_end"},
+		},
+		{
+			name: "legacy history without task events",
+			lines: []string{
+				userMsg("00", "First"),
+				line("00", "event_msg", `{"type":"user_message","message":"First"}`),
+			},
+			want: []string{"turn_start:First"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2274,7 +2298,6 @@ func TestCodexTurnErrorClassification(t *testing.T) {
 		})
 	}
 }
-
 
 func derefInt(n *int) interface{} {
 	if n == nil {

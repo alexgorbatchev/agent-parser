@@ -194,17 +194,17 @@ func TestContextWindowResolutionAndFullness_Codex(t *testing.T) {
 			"info": {
 				"total_token_usage": {
 					"total_tokens": 5000,
-					"prompt_tokens": 4000,
-					"completion_tokens": 1000,
-					"cached_prompt_tokens": 500,
-					"reasoning_tokens": 200
+					"input_tokens": 4000,
+					"output_tokens": 1000,
+					"cached_input_tokens": 500,
+					"reasoning_output_tokens": 200
 				},
 				"last_token_usage": {
 					"total_tokens": 800,
-					"prompt_tokens": 600,
-					"completion_tokens": 200,
-					"cached_prompt_tokens": 100,
-					"reasoning_tokens": 50
+					"input_tokens": 600,
+					"output_tokens": 200,
+					"cached_input_tokens": 100,
+					"reasoning_output_tokens": 50
 				},
 				"model_context_window": 128000
 			}

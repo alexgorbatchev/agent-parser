@@ -164,16 +164,18 @@ export interface ICodexGitMeta {
  * Detailed token metrics for an individual turn or cumulative session.
  */
 export interface ICodexTokenBreakdown {
-  /** Total tokens (prompt + completion). */
+  /** All input tokens, including the cached and cache-write parts below. */
+  readonly input_tokens: number;
+  /** Input tokens read from the prompt cache (part of `input_tokens`). */
+  readonly cached_input_tokens: number;
+  /** Input tokens written to the prompt cache (part of `input_tokens`); absent in older rollouts. */
+  readonly cache_write_input_tokens?: number;
+  /** Generated output tokens, including reasoning tokens. */
+  readonly output_tokens: number;
+  /** Reasoning tokens (part of `output_tokens`). */
+  readonly reasoning_output_tokens: number;
+  /** Total tokens as reported by Codex. */
   readonly total_tokens: number;
-  /** Non-cached prompt / input tokens. */
-  readonly prompt_tokens?: number;
-  /** Generated completion / output tokens. */
-  readonly completion_tokens?: number;
-  /** Prompt tokens read from cache. */
-  readonly cached_prompt_tokens?: number;
-  /** Reasoning / internal thinking tokens. */
-  readonly reasoning_tokens?: number;
 }
 
 /**

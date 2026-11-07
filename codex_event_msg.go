@@ -134,16 +134,18 @@ func codexTokenCountEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser
 	info := *evt.Info
 
 	chosen := info.LastTokenUsage
-	if chosen.TotalTokens == 0 && chosen.PromptTokens == 0 && chosen.CompletionTokens == 0 {
+	if chosen.TotalTokens == 0 && chosen.InputTokens == 0 && chosen.OutputTokens == 0 {
 		chosen = info.TotalTokenUsage
 	}
 
 	tot := chosen.TotalTokens
 	if tot == 0 {
-		tot = chosen.PromptTokens + chosen.CompletionTokens
+		tot = chosen.InputTokens + chosen.OutputTokens
 	}
 
-	freshInput := chosen.PromptTokens - chosen.CachedPromptTokens
+	// Input counts only fresh tokens, as for the other harnesses: Codex's
+	// cached and cache-write counts are parts of input_tokens.
+	freshInput := chosen.InputTokens - chosen.CachedInputTokens - chosen.CacheWriteInputTokens
 	if freshInput < 0 {
 		freshInput = 0
 	}
@@ -167,10 +169,10 @@ func codexTokenCountEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser
 			ModelContextWindow: cwPtr,
 			Usage: &TokenUsage{
 				Input:      freshInput,
-				Output:     chosen.CompletionTokens,
-				CacheRead:  chosen.CachedPromptTokens,
-				CacheWrite: 0,
-				Reasoning:  chosen.ReasoningTokens,
+				Output:     chosen.OutputTokens,
+				CacheRead:  chosen.CachedInputTokens,
+				CacheWrite: chosen.CacheWriteInputTokens,
+				Reasoning:  chosen.ReasoningOutputTokens,
 				Total:      tot,
 			},
 			RateLimitResetAt:  resetAtPtr,

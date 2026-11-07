@@ -385,17 +385,17 @@ func TestParseCodexLine(t *testing.T) {
 				"info": {
 					"total_token_usage": {
 						"total_tokens": 5000,
-						"prompt_tokens": 4000,
-						"completion_tokens": 1000,
-						"cached_prompt_tokens": 500,
-						"reasoning_tokens": 200
+						"input_tokens": 4000,
+						"output_tokens": 1000,
+						"cached_input_tokens": 500,
+						"reasoning_output_tokens": 200
 					},
 					"last_token_usage": {
 						"total_tokens": 800,
-						"prompt_tokens": 600,
-						"completion_tokens": 200,
-						"cached_prompt_tokens": 100,
-						"reasoning_tokens": 50
+						"input_tokens": 600,
+						"output_tokens": 200,
+						"cached_input_tokens": 100,
+						"reasoning_output_tokens": 50
 					},
 					"model_context_window": 128000
 				}
@@ -423,6 +423,33 @@ func TestParseCodexLine(t *testing.T) {
 		}
 		if evs[0].Data.ContextFullness != nil {
 			t.Errorf("expected nil ContextFullness, got %v", *evs[0].Data.ContextFullness)
+		}
+	})
+
+	t.Run("event_msg token_count separates cache writes from fresh input", func(t *testing.T) {
+		// Shape written by Codex's TokenUsage: cached and cache-write tokens are
+		// parts of input_tokens, and reasoning tokens are part of output_tokens.
+		line := `{"timestamp":"2026-06-12T16:08:42.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":6000,"cache_write_input_tokens":1000,"output_tokens":300,"reasoning_output_tokens":120,"total_tokens":9300},"last_token_usage":{"input_tokens":3000,"cached_input_tokens":2000,"cache_write_input_tokens":400,"output_tokens":90,"reasoning_output_tokens":30,"total_tokens":3090},"model_context_window":258400},"rate_limits":null}}`
+		evs, err := ParseCodexLine([]byte(line))
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("evs=%v err=%v", evs, err)
+		}
+		u := evs[0].Data.Usage
+		want := TokenUsage{Input: 600, Output: 90, CacheRead: 2000, CacheWrite: 400, Reasoning: 30, Total: 3090}
+		if u == nil || *u != want {
+			t.Errorf("Usage = %+v, want %+v", u, want)
+		}
+	})
+
+	t.Run("event_msg token_count ignores token names Codex never writes", func(t *testing.T) {
+		line := `{"timestamp":"2026-06-12T16:08:42.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":10},"last_token_usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}}}`
+		evs, err := ParseCodexLine([]byte(line))
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("evs=%v err=%v", evs, err)
+		}
+		want := TokenUsage{Total: 10}
+		if u := evs[0].Data.Usage; u == nil || *u != want {
+			t.Errorf("Usage = %+v, want %+v", u, want)
 		}
 	})
 
@@ -521,8 +548,8 @@ func TestParseCodexLine(t *testing.T) {
 			"payload": {
 				"type": "token_count",
 				"info": {
-					"total_token_usage": { "total_tokens": 1500, "prompt_tokens": 1000, "completion_tokens": 500 },
-					"last_token_usage": { "total_tokens": 150, "prompt_tokens": 100, "completion_tokens": 50 },
+					"total_token_usage": { "total_tokens": 1500, "input_tokens": 1000, "output_tokens": 500 },
+					"last_token_usage": { "total_tokens": 150, "input_tokens": 100, "output_tokens": 50 },
 					"model_context_window": 128000
 				},
 				"rate_limits": {
@@ -602,13 +629,13 @@ func TestParseCodexLine(t *testing.T) {
 				"info": {
 					"total_token_usage": {
 						"total_tokens": 1500,
-						"prompt_tokens": 1000,
-						"completion_tokens": 500
+						"input_tokens": 1000,
+						"output_tokens": 500
 					},
 					"last_token_usage": {
 						"total_tokens": 150,
-						"prompt_tokens": 100,
-						"completion_tokens": 50
+						"input_tokens": 100,
+						"output_tokens": 50
 					},
 					"model_context_window": 128000
 				},
@@ -697,8 +724,8 @@ func TestParseCodexLine(t *testing.T) {
 			"payload": {
 				"type": "token_count",
 				"info": {
-					"total_token_usage": {"total_tokens": 100, "prompt_tokens": 80, "completion_tokens": 20},
-					"last_token_usage": {"total_tokens": 100, "prompt_tokens": 80, "completion_tokens": 20}
+					"total_token_usage": {"total_tokens": 100, "input_tokens": 80, "output_tokens": 20},
+					"last_token_usage": {"total_tokens": 100, "input_tokens": 80, "output_tokens": 20}
 				},
 				"rate_limits": {
 					"secondary": {
@@ -1036,8 +1063,8 @@ func TestParseCodexLine(t *testing.T) {
 			"payload": {
 				"type": "token_count",
 				"info": {
-					"total_token_usage": {"total_tokens": 1000, "prompt_tokens": 800, "completion_tokens": 200},
-					"last_token_usage": {"total_tokens": 100, "prompt_tokens": 80, "completion_tokens": 20}
+					"total_token_usage": {"total_tokens": 1000, "input_tokens": 800, "output_tokens": 200},
+					"last_token_usage": {"total_tokens": 100, "input_tokens": 80, "output_tokens": 20}
 				},
 				"rate_limits": {
 					"primary": {

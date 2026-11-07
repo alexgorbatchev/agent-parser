@@ -174,12 +174,16 @@ type rawCodexTurnContextPayload struct {
 	RealtimeActive    bool                   `json:"realtime_active"`
 }
 
+// rawCodexTokenBreakdown is Codex's TokenUsage. Cached and cache-write input
+// tokens are parts of InputTokens, and reasoning tokens are part of
+// OutputTokens.
 type rawCodexTokenBreakdown struct {
-	TotalTokens        int64 `json:"total_tokens"`
-	PromptTokens       int64 `json:"prompt_tokens"`
-	CompletionTokens   int64 `json:"completion_tokens"`
-	CachedPromptTokens int64 `json:"cached_prompt_tokens"`
-	ReasoningTokens    int64 `json:"reasoning_tokens"`
+	InputTokens           int64 `json:"input_tokens"`
+	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
+	OutputTokens          int64 `json:"output_tokens"`
+	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+	TotalTokens           int64 `json:"total_tokens"`
 }
 
 type rawCodexTokenCountInfo struct {

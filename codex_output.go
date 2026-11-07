@@ -45,7 +45,9 @@ func firstCodexText(items []interface{}) string {
 	if !ok {
 		return ""
 	}
-	if kind, _ := item["type"].(string); kind != "input_text" && kind != "output_text" {
+	// Codex converts tool output text to input_text items
+	// (FunctionCallOutputContentItem has no other text variant).
+	if kind, _ := item["type"].(string); kind != "input_text" {
 		return ""
 	}
 	text, _ := item["text"].(string)

@@ -68,3 +68,11 @@ func describeBool(b *bool) string {
 	}
 	return fmt.Sprint(*b)
 }
+
+func TestCodexToolStatusIgnoresNonInputTextFirstItem(t *testing.T) {
+	line := `{"type":"response_item","timestamp":"2026-11-07T10:00:00Z","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"output_text","text":"Script failed\nOutput:\n"}]}}`
+	evs, err := ParseCodexLine([]byte(line))
+	if err != nil || len(evs) != 1 || evs[0].Data.IsError != nil {
+		t.Errorf("ParseCodexLine = %+v, %v; want one result with unknown outcome", evs, err)
+	}
+}

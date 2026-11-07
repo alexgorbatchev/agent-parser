@@ -672,7 +672,42 @@ export type CodexToolOutputContentItem =
   | ICodexToolOutputAudioItem
   | ICodexToolOutputEncryptedItem;
 
+/**
+ * Tool output as text or a content array.
+ *
+ * Codex does not persist a success flag (`FunctionCallOutputPayload` serializes
+ * only its body). The outcome is the status header at the start of the text, or
+ * of the array's first `input_text` item:
+ *
+ * - Code-mode `exec`/`wait` (`core/src/tools/code_mode/mod.rs`,
+ *   `format_script_status`): first line `Script completed`, `Script failed`,
+ *   `Script terminated`, or `Script running with cell ID <id>`, followed by a
+ *   `Wall time …` line and `Output:`. A failed script also gets a
+ *   `Script error:
+<message>` item.
+ * - Unified `exec_command`/`write_stdin` (`core/src/tools/context.rs`,
+ *   `response_header`): header lines `Chunk ID: <id>` (optional),
+ *   `Wall time: <s> seconds`, then `Process exited with code <n>` or
+ *   `Process running with session ID <id>`, optional `Original token count: <n>`,
+ *   and `Output:` before the output text.
+ * - `shell`, `shell_command` and `apply_patch` (`core/src/tools/mod.rs`,
+ *   `format_exec_output_for_model`): first line `Exit code: <n>`.
+ * - Older rollouts: the text is JSON shaped as {@link ICodexLegacyExecOutput}.
+ * - Aborted calls (`core/src/tools/parallel.rs`, `abort_message`):
+ *   `aborted before dispatch`, `aborted by user after <s>s`, or
+ *   `Wall time: <s> seconds\naborted by user`.
+ * - Handler errors, MCP results and other tools carry no outcome marker.
+ */
 export type CodexToolOutputBody = string | readonly CodexToolOutputContentItem[];
+
+/** JSON text body of exec and apply_patch outputs in older rollouts. */
+export interface ICodexLegacyExecOutput {
+  readonly output: string;
+  readonly metadata: {
+    readonly exit_code: number;
+    readonly duration_seconds?: number;
+  };
+}
 
 export interface ICodexFunctionCallOutputPayload {
   readonly type: "function_call_output";

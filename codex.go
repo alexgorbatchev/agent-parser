@@ -158,6 +158,9 @@ type rawCodexSessionMetaPayload struct {
 	AgentNickname     string           `json:"agent_nickname"`
 	AgentRole         string           `json:"agent_role"`
 	MultiAgentVersion string           `json:"multi_agent_version"`
+	// SubagentHistoryStartOrdinal is the first ordinal of a forked subagent's
+	// own history; earlier records are context inherited from the parent.
+	SubagentHistoryStartOrdinal *uint64 `json:"subagent_history_start_ordinal,omitempty"`
 }
 
 type rawCodexTurnContextPayload struct {
@@ -309,9 +312,11 @@ type rawCodexResponseItemPayload struct {
 }
 
 type rawCodexLine struct {
-	Type      string          `json:"type"`
-	Timestamp interface{}     `json:"timestamp"`
-	Payload   json.RawMessage `json:"payload"`
+	Type      string      `json:"type"`
+	Timestamp interface{} `json:"timestamp"`
+	// Ordinal is the record's position in a paginated-history rollout.
+	Ordinal *uint64         `json:"ordinal,omitempty"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 // CodexParser maintains session stream state when parsing Codex rollout transcripts.
@@ -324,6 +329,11 @@ type CodexParser struct {
 	// lastTotalUsage is the cumulative usage of the previous token_count
 	// record, used to recognize records Codex re-sends without new usage.
 	lastTotalUsage *rawCodexTokenBreakdown
+	// sessionMetaSeen is set once the rollout's own session_meta, its first
+	// record, has been parsed; historyStartOrdinal is that record's
+	// subagent_history_start_ordinal.
+	sessionMetaSeen     bool
+	historyStartOrdinal *uint64
 }
 
 // NewCodexParser creates a new stateful parser stream for Codex transcripts.
@@ -340,6 +350,8 @@ func (p *CodexParser) Reset() {
 	p.rateLimitResetAt = nil
 	p.retryAfterSeconds = nil
 	p.lastTotalUsage = nil
+	p.sessionMetaSeen = false
+	p.historyStartOrdinal = nil
 }
 
 // ParseLine parses a single line using this CodexParser instance.
@@ -361,6 +373,10 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 	var raw rawCodexLine
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 		return nil, fmt.Errorf("unmarshaling codex line: %w", err)
+	}
+
+	if p.isInheritedHistory(raw.Ordinal) {
+		return nil, nil
 	}
 
 	ts := parseTimestamp(raw.Timestamp)

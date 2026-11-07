@@ -2040,3 +2040,87 @@ func TestCodexTokenCountWithoutNewUsage(t *testing.T) {
 		t.Errorf("parse after Reset = %+v; want one usage event", evs)
 	}
 }
+
+// codexForkRollout mirrors the head of a forked subagent rollout: the child's
+// own session_meta at ordinal 0, then the parent's history replayed as
+// inherited context up to subagent_history_start_ordinal, then the child's own
+// records.
+var codexForkRollout = []string{
+	`{"timestamp":"2026-11-07T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"child-thread","timestamp":"2026-11-07T10:00:00.000Z","cwd":"/work","originator":"codex_exec","cli_version":"0.166.0","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1,"agent_nickname":"Helper","agent_role":"worker"}}},"model_provider":"openai","history_mode":"paginated","subagent_history_start_ordinal":5}}`,
+	`{"timestamp":"2026-11-07T10:00:00.001Z","ordinal":1,"type":"session_meta","payload":{"id":"parent-thread","timestamp":"2026-11-07T09:00:00.000Z","cwd":"/work","originator":"codex_exec","cli_version":"0.166.0","source":"cli","model_provider":"openai","history_mode":"paginated"}}`,
+	`{"timestamp":"2026-11-07T10:00:00.002Z","ordinal":2,"type":"turn_context","payload":{"cwd":"/work","model":"parent-model"}}`,
+	`{"timestamp":"2026-11-07T10:00:00.003Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Parent prompt"}]}}`,
+	`{"timestamp":"2026-11-07T10:00:00.004Z","ordinal":4,"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_parent"}}`,
+	`{"timestamp":"2026-11-07T10:00:01.000Z","ordinal":5,"type":"turn_context","payload":{"cwd":"/work","model":"child-model"}}`,
+	`{"timestamp":"2026-11-07T10:00:02.000Z","ordinal":6,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Child task"}]}}`,
+}
+
+func TestCodexForkSkipsInheritedParentHistory(t *testing.T) {
+	p := NewCodexParser()
+	var got []string
+	for _, line := range codexForkRollout {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatalf("ParseLine(%s): %v", line, err)
+		}
+		for _, ev := range evs {
+			desc := ev.EventType
+			switch {
+			case ev.Data.Title != nil:
+				desc += ":" + *ev.Data.Title
+			case ev.Data.Model != nil:
+				desc += ":" + *ev.Data.Model
+			case ev.Data.Content != nil:
+				desc += ":" + *ev.Data.Content
+			}
+			got = append(got, desc)
+		}
+	}
+	want := []string{
+		"run_started:Codex Subagent: Helper (worker)",
+		"model_change:child-model",
+		"turn_start:Child task",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+
+	// Reset forgets the fork boundary, so the next rollout starts fresh.
+	p.Reset()
+	evs, err := p.ParseLine([]byte(codexForkRollout[1]))
+	if err != nil || len(evs) != 1 || evs[0].EventType != "run_started" {
+		t.Errorf("parent session_meta after Reset = %+v, %v; want run_started", evs, err)
+	}
+}
+
+func TestCodexOrdinalsWithoutForkAreKept(t *testing.T) {
+	lines := []string{
+		`{"timestamp":"2026-11-07T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"root-thread","timestamp":"2026-11-07T10:00:00.000Z","cwd":"/work","source":"cli","model_provider":"openai","history_mode":"paginated"}}`,
+		`{"timestamp":"2026-11-07T10:00:01.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Root prompt"}]}}`,
+		// A later session_meta cannot introduce a fork boundary.
+		`{"timestamp":"2026-11-07T10:00:02.000Z","ordinal":2,"type":"session_meta","payload":{"id":"other","cwd":"/work","source":"cli","subagent_history_start_ordinal":9}}`,
+		`{"timestamp":"2026-11-07T10:00:03.000Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Next prompt"}]}}`,
+	}
+	p := NewCodexParser()
+	var prompts int
+	for _, line := range lines {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatalf("ParseLine: %v", err)
+		}
+		for _, ev := range evs {
+			if ev.EventType == "turn_start" {
+				prompts++
+			}
+		}
+	}
+	if prompts != 2 {
+		t.Errorf("turn_start count = %d, want 2", prompts)
+	}
+
+	// The stateless parser has no session_meta and cannot tell inherited
+	// records apart, so it parses them.
+	if evs, err := ParseCodexLine([]byte(codexForkRollout[3])); err != nil || len(evs) != 1 {
+		t.Errorf("stateless inherited record = %+v, %v; want one event", evs, err)
+	}
+}

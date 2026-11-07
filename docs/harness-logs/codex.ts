@@ -357,11 +357,19 @@ export interface ICodexSessionMetaPayload {
   readonly agent_role?: string;
   /** Multi-agent protocol version. */
   readonly multi_agent_version?: string;
+  /**
+   * First record ordinal of a forked subagent's own history. Earlier records
+   * replay the parent's history as inherited model context and are not part of
+   * the subagent's turns or items.
+   */
+  readonly subagent_history_start_ordinal?: number;
 }
 
 export interface ICodexSessionMetaRecord {
   readonly type: "session_meta";
   readonly timestamp: string;
+  /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
+  readonly ordinal?: number;
   readonly payload: ICodexSessionMetaPayload;
 }
 
@@ -398,6 +406,8 @@ export interface ICodexTurnContextPayload {
 export interface ICodexTurnContextRecord {
   readonly type: "turn_context";
   readonly timestamp: string;
+  /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
+  readonly ordinal?: number;
   readonly payload: ICodexTurnContextPayload;
 }
 
@@ -589,6 +599,8 @@ export type CodexEventMsgPayload =
 export interface ICodexEventMsgRecord {
   readonly type: "event_msg";
   readonly timestamp: string;
+  /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
+  readonly ordinal?: number;
   readonly payload: CodexEventMsgPayload;
 }
 
@@ -724,6 +736,8 @@ export type CodexResponseItemPayload =
 export interface ICodexResponseItemRecord {
   readonly type: "response_item";
   readonly timestamp: string;
+  /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
+  readonly ordinal?: number;
   readonly payload: CodexResponseItemPayload;
 }
 

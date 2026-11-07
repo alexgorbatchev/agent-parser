@@ -12,6 +12,8 @@ func parseCodexSessionMeta(payload json.RawMessage, ts int64, p *CodexParser) ([
 		return nil, fmt.Errorf("unmarshaling session_meta payload: %w", err)
 	}
 
+	p.recordHistoryStart(meta.SubagentHistoryStartOrdinal)
+
 	if meta.Timestamp != "" {
 		ts = parseTimestamp(meta.Timestamp)
 	}

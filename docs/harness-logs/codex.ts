@@ -553,7 +553,69 @@ export interface ICodexItemCompletedPayload {
     | ICodexCompletedCommandExecution
     | ICodexCompletedUserMessage
     | ICodexCompletedFileChange
+    | ICodexCompletedMcpToolCall
+    | ICodexCompletedWebSearch
+    | ICodexCompletedExtension
+    | ICodexCompletedImageView
+    | ICodexCompletedDynamicToolCall
     | Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Completed tool items. A tool call made from a code-mode script is recorded only as one of
+ * these (ids like `exec-<uuid>`); a tool call recorded as a response item repeats as an item
+ * whose `id` is its `call_id`. Paths and `cwd` are file URLs.
+ */
+export type CodexItemStatus = "in_progress" | "completed" | "failed" | "declined";
+
+export interface ICodexCompletedMcpToolCall {
+  readonly type: "McpToolCall";
+  readonly id: string;
+  readonly server: string;
+  readonly tool: string;
+  readonly arguments?: Readonly<Record<string, unknown>>;
+  readonly status?: CodexItemStatus;
+  /** MCP `CallToolResult`; `isError` marks a failed call. */
+  readonly result?: { readonly content?: readonly unknown[]; readonly isError?: boolean } | null;
+  readonly error?: unknown;
+  readonly duration?: unknown;
+}
+
+export interface ICodexCompletedWebSearch {
+  readonly type: "WebSearch";
+  readonly id: string;
+  readonly query: string;
+  readonly action?: Readonly<Record<string, unknown>>;
+}
+
+/** Extension tool such as `web.search` or `image.generate`, named by `kind`. */
+export interface ICodexCompletedExtension {
+  readonly type: "Extension";
+  readonly id: string;
+  readonly kind: string;
+  readonly status?: CodexItemStatus | null;
+  readonly query?: string;
+  readonly action?: Readonly<Record<string, unknown>>;
+  readonly results?: readonly unknown[];
+  readonly result?: unknown;
+  readonly failure?: unknown;
+}
+
+export interface ICodexCompletedImageView {
+  readonly type: "ImageView";
+  readonly id: string;
+  readonly path: string;
+}
+
+export interface ICodexCompletedDynamicToolCall {
+  readonly type: "DynamicToolCall";
+  readonly id: string;
+  readonly tool: string;
+  readonly arguments?: Readonly<Record<string, unknown>>;
+  readonly status?: CodexItemStatus;
+  readonly content_items?: readonly unknown[];
+  readonly success?: boolean | null;
+  readonly duration?: unknown;
 }
 
 /**

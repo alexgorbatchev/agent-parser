@@ -198,15 +198,17 @@ type rawCodexTokenCountInfo struct {
 }
 
 type rawCodexEventMsgPayload struct {
-	Item             json.RawMessage `json:"item,omitempty"`
-	Type             string          `json:"type"`
-	Message          string          `json:"message"`
-	TurnID           string          `json:"turn_id"`
-	StartedAt        json.RawMessage `json:"started_at"`
-	CompletedAt      json.RawMessage `json:"completed_at"`
-	DurationMS       int64           `json:"duration_ms"`
-	LastAgentMessage string          `json:"last_agent_message"`
-	CodexErrorInfo   interface{}     `json:"codex_error_info,omitempty"`
+	Item        json.RawMessage `json:"item,omitempty"`
+	Type        string          `json:"type"`
+	Message     string          `json:"message"`
+	TurnID      string          `json:"turn_id"`
+	StartedAt   json.RawMessage `json:"started_at"`
+	CompletedAt json.RawMessage `json:"completed_at"`
+	DurationMS  int64           `json:"duration_ms"`
+	// StartedAtMs bounds the start of an item_completed item.
+	StartedAtMs      *int64      `json:"started_at_ms,omitempty"`
+	LastAgentMessage string      `json:"last_agent_message"`
+	CodexErrorInfo   interface{} `json:"codex_error_info,omitempty"`
 	// Reason is why a turn_aborted turn stopped (TurnAbortReason).
 	Reason string `json:"reason,omitempty"`
 	// Error describes why a task_complete or turn_aborted turn failed.
@@ -240,7 +242,7 @@ type rawCodexAgentMessage struct {
 	Questions []map[string]interface{} `json:"questions"`
 }
 
-func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]ParsedEvent, error) {
+func parseCodexCompletedItem(raw json.RawMessage, ts int64, startedAt *int64, p *CodexParser) ([]ParsedEvent, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -252,7 +254,14 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]P
 	}
 	switch header.Type {
 	case "CommandExecution":
-		return parseCodexCommandExecution(raw, ts)
+		skills, err := parseCodexCommandExecution(raw, ts)
+		if err != nil {
+			return nil, err
+		}
+		calls, err := parseCodexToolItem(header.Type, raw, ts, startedAt, p)
+		return append(calls, skills...), err
+	case "McpToolCall", "WebSearch", "ImageView", "Extension", "DynamicToolCall":
+		return parseCodexToolItem(header.Type, raw, ts, startedAt, p)
 	case "UserMessage":
 		return parseCodexUserMessage(raw, ts, p)
 	case "FileChange":
@@ -347,6 +356,9 @@ type CodexParser struct {
 	// other event arrives, so the prompt can be reported on it.
 	turnOpen         bool
 	pendingTurnStart *ParsedEvent
+	// callIDs holds the IDs of tool calls recorded as response items, whose
+	// completed items repeat them.
+	callIDs map[string]struct{}
 	// paginated is set when the rollout's own session_meta declares paginated
 	// history, whose completed UserMessage items are the prompt source.
 	// userImages holds the images of the user response_item on line
@@ -375,6 +387,7 @@ func (p *CodexParser) Reset() {
 	p.historyStartOrdinal = nil
 	p.turnOpen = false
 	p.pendingTurnStart = nil
+	p.callIDs = nil
 	p.paginated = false
 	p.line = 0
 	p.userImages = nil

@@ -14,7 +14,7 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) (
 
 	switch resp.Type {
 	case "function_call", "custom_tool_call":
-		return codexToolCallEvents(resp, ts), nil
+		return codexToolCallEvents(resp, ts, p), nil
 	case "function_call_output", "custom_tool_call_output":
 		return codexToolOutputEvents(resp, ts), nil
 	case "message":
@@ -55,7 +55,8 @@ var codexQuestionTools = map[string]bool{
 	"request_user_input_async": true,
 }
 
-func codexToolCallEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedEvent {
+func codexToolCallEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexParser) []ParsedEvent {
+	p.recordCallID(resp.CallID)
 	inputMap := codexToolInput(resp)
 	data := EventData{
 		Role:             stringPtr("assistant"),

@@ -271,3 +271,25 @@ func (p *CodexParser) takeAdjacentUserImages() ([]Image, bool) {
 	p.userImagesLine = 0
 	return images, true
 }
+
+// recordCallID remembers a tool call recorded as a response item.
+func (p *CodexParser) recordCallID(callID string) {
+	if p == nil || callID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.callIDs == nil {
+		p.callIDs = make(map[string]struct{})
+	}
+	p.callIDs[callID] = struct{}{}
+}
+
+// isRecordedCall reports whether a tool call with this ID was recorded as a
+// response item.
+func (p *CodexParser) isRecordedCall(callID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.callIDs[callID]
+	return ok
+}

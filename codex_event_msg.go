@@ -17,7 +17,7 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 
 	switch evt.Type {
 	case "item_completed":
-		return parseCodexCompletedItem(evt.Item, ts)
+		return parseCodexCompletedItem(evt.Item, ts, p)
 	case "user_message":
 		// Legacy-history rollouts persist this event as a copy of the prompt
 		// already recorded as a user response_item (Session::

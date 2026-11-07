@@ -23,7 +23,7 @@ When tool calls perform file edits or patches, `agent-parser` parses the paramet
 
 - **Faithful parsing without synthetic metrics**: `agent-parser` extracts only the fields recorded by the harness. It does not perform external model catalog lookups or calculate synthetic metrics like context window fullness; enrichment is left to downstream consumers.
 - **Streaming multi-block deduplication**: Claude Code streams assistant responses across separate lines sharing the same `requestId` and `message.id`. `ClaudeCodeParser` deduplicates usage reporting across blocks so total token counts are never multiplied.
-- **Synthetic prompt filtering**: OpenAI Codex prepends `<environment_context>` blocks to transcripts, and Claude Code injects synthetic command sequences. Title extraction routines strip these synthetic headers to retrieve the genuine user intent.
+- **Synthetic prompt filtering**: OpenAI Codex records context it injects for the model (instructions, environment state, skills, notifications) as user-role messages, and Claude Code injects synthetic command sequences. For paginated Codex rollouts, `CodexParser` takes prompts from Codex's completed `UserMessage` items, which leave that context out; otherwise it applies Codex's contextual-fragment rule to user messages. Title extraction also strips leading `<environment_context>` blocks.
 - **In-memory state management**: Parsers (`ClaudeCodeParser`, `CodexParser`) maintain safe in-memory state protected by sync primitives to correlate streaming requests, resolve turn context across lines, and track active models.
 - **Read-only SQLite access**: `OpenOpencodeDB` connects to OpenCode's WAL database in read-only mode, querying sessions, messages, and parts without database locks or write side-effects.
 

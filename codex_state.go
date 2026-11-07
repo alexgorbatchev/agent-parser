@@ -103,9 +103,10 @@ func (p *CodexParser) isRepeatedUsage(total rawCodexTokenBreakdown) bool {
 	return repeated
 }
 
-// recordHistoryStart keeps the subagent history start of the rollout's own
-// session_meta. Later session_meta records belong to inherited parent history.
-func (p *CodexParser) recordHistoryStart(start *uint64) {
+// recordHistoryStart keeps the subagent history start and history mode of the
+// rollout's own session_meta. Later session_meta records belong to inherited
+// parent history.
+func (p *CodexParser) recordHistoryStart(start *uint64, paginated bool) {
 	if p == nil {
 		return
 	}
@@ -116,6 +117,7 @@ func (p *CodexParser) recordHistoryStart(start *uint64) {
 	}
 	p.sessionMetaSeen = true
 	p.historyStartOrdinal = start
+	p.paginated = paginated
 }
 
 // isInheritedHistory reports whether a record of a forked subagent's rollout
@@ -225,4 +227,47 @@ func (p *CodexParser) endTurn() []ParsedEvent {
 		return nil
 	}
 	return []ParsedEvent{*start}
+}
+
+// isPaginated reports whether the rollout declared paginated history. The
+// stateless path cannot know and reports false.
+func (p *CodexParser) isPaginated() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.paginated
+}
+
+func (p *CodexParser) advanceLine() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.line++
+	p.mu.Unlock()
+}
+
+// recordUserImages keeps a user response_item's images for the UserMessage
+// item on the next line.
+func (p *CodexParser) recordUserImages(images []Image) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.userImages = images
+	p.userImagesLine = p.line
+}
+
+// takeAdjacentUserImages returns the images of the user response_item on the
+// previous line, if that is where they were recorded.
+func (p *CodexParser) takeAdjacentUserImages() ([]Image, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.userImagesLine == 0 || p.userImagesLine != p.line-1 {
+		return nil, false
+	}
+	images := p.userImages
+	p.userImages = nil
+	p.userImagesLine = 0
+	return images, true
 }

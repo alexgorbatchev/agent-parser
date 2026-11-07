@@ -2057,6 +2057,7 @@ var codexForkRollout = []string{
 	`{"timestamp":"2026-11-07T10:00:00.004Z","ordinal":4,"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_parent"}}`,
 	`{"timestamp":"2026-11-07T10:00:01.000Z","ordinal":5,"type":"turn_context","payload":{"cwd":"/work","model":"child-model"}}`,
 	`{"timestamp":"2026-11-07T10:00:02.000Z","ordinal":6,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Child task"}]}}`,
+	`{"timestamp":"2026-11-07T10:00:02.001Z","ordinal":7,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"Child task","text_elements":[]}]}}}`,
 }
 
 func TestCodexForkSkipsInheritedParentHistory(t *testing.T) {
@@ -2101,9 +2102,11 @@ func TestCodexOrdinalsWithoutForkAreKept(t *testing.T) {
 	lines := []string{
 		`{"timestamp":"2026-11-07T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"root-thread","timestamp":"2026-11-07T10:00:00.000Z","cwd":"/work","source":"cli","model_provider":"openai","history_mode":"paginated"}}`,
 		`{"timestamp":"2026-11-07T10:00:01.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Root prompt"}]}}`,
+		`{"timestamp":"2026-11-07T10:00:01.001Z","ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"Root prompt","text_elements":[]}]}}}`,
 		// A later session_meta cannot introduce a fork boundary.
 		`{"timestamp":"2026-11-07T10:00:02.000Z","ordinal":2,"type":"session_meta","payload":{"id":"other","cwd":"/work","source":"cli","subagent_history_start_ordinal":9}}`,
 		`{"timestamp":"2026-11-07T10:00:03.000Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Next prompt"}]}}`,
+		`{"timestamp":"2026-11-07T10:00:03.001Z","ordinal":4,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u2","content":[{"type":"text","text":"Next prompt","text_elements":[]}]}}}`,
 	}
 	p := NewCodexParser()
 	var prompts int

@@ -12,7 +12,7 @@ func parseCodexSessionMeta(payload json.RawMessage, ts int64, p *CodexParser) ([
 		return nil, fmt.Errorf("unmarshaling session_meta payload: %w", err)
 	}
 
-	p.recordHistoryStart(meta.SubagentHistoryStartOrdinal)
+	p.recordHistoryStart(meta.SubagentHistoryStartOrdinal, meta.HistoryMode == "paginated")
 
 	if meta.Timestamp != "" {
 		ts = parseTimestamp(meta.Timestamp)

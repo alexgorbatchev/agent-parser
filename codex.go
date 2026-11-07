@@ -161,6 +161,8 @@ type rawCodexSessionMetaPayload struct {
 	// SubagentHistoryStartOrdinal is the first ordinal of a forked subagent's
 	// own history; earlier records are context inherited from the parent.
 	SubagentHistoryStartOrdinal *uint64 `json:"subagent_history_start_ordinal,omitempty"`
+	// HistoryMode is "legacy" (Codex's default when absent) or "paginated".
+	HistoryMode string `json:"history_mode,omitempty"`
 }
 
 type rawCodexTurnContextPayload struct {
@@ -238,7 +240,7 @@ type rawCodexAgentMessage struct {
 	Questions []map[string]interface{} `json:"questions"`
 }
 
-func parseCodexCompletedItem(raw json.RawMessage, ts int64) ([]ParsedEvent, error) {
+func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]ParsedEvent, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -252,7 +254,7 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64) ([]ParsedEvent, erro
 	case "CommandExecution":
 		return parseCodexCommandExecution(raw, ts)
 	case "UserMessage":
-		return parseCodexUserMessageSkills(raw, ts)
+		return parseCodexUserMessage(raw, ts, p)
 	}
 	if header.Type != "AgentMessage" {
 		return nil, nil
@@ -349,6 +351,14 @@ type CodexParser struct {
 	// other event arrives, so the prompt can be reported on it.
 	turnOpen         bool
 	pendingTurnStart *ParsedEvent
+	// paginated is set when the rollout's own session_meta declares paginated
+	// history, whose completed UserMessage items are the prompt source.
+	// userImages holds the images of the user response_item on line
+	// userImagesLine, which the following UserMessage item describes.
+	paginated      bool
+	line           int
+	userImages     []Image
+	userImagesLine int
 }
 
 // NewCodexParser creates a new stateful parser stream for Codex transcripts.
@@ -369,6 +379,10 @@ func (p *CodexParser) Reset() {
 	p.historyStartOrdinal = nil
 	p.turnOpen = false
 	p.pendingTurnStart = nil
+	p.paginated = false
+	p.line = 0
+	p.userImages = nil
+	p.userImagesLine = 0
 }
 
 // ParseLine parses a single line using this CodexParser instance.
@@ -398,6 +412,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 
 	ts := parseTimestamp(raw.Timestamp)
 
+	p.advanceLine()
 	pending := p.pendingTurn()
 
 	var events []ParsedEvent
@@ -457,10 +472,44 @@ type rawCodexCommandExecution struct {
 
 type rawCodexUserMessage struct {
 	Content []struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
 	} `json:"content"`
+}
+
+// parseCodexUserMessage reports a completed UserMessage item. Codex builds it
+// only for real user input, leaving out the context it injects as user-role
+// messages, so in paginated history it is the prompt source. Its local images
+// carry only a path; the user response_item recorded just before it holds
+// their data.
+func parseCodexUserMessage(raw json.RawMessage, ts int64, p *CodexParser) ([]ParsedEvent, error) {
+	skills, err := parseCodexUserMessageSkills(raw, ts)
+	if err != nil || !p.isPaginated() {
+		return skills, err
+	}
+	var item rawCodexUserMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, fmt.Errorf("unmarshaling completed user message: %w", err)
+	}
+	var text strings.Builder
+	var images []Image
+	for _, content := range item.Content {
+		switch content.Type {
+		case "text":
+			text.WriteString(content.Text)
+		case "image":
+			if content.ImageURL != "" {
+				images = append(images, imageFromURL(content.ImageURL))
+			}
+		}
+	}
+	if recorded, ok := p.takeAdjacentUserImages(); ok {
+		images = recorded
+	}
+	return append(p.promptEvents(codexUserPromptEvents(text.String(), images, ts)), skills...), nil
 }
 
 // parseCodexUserMessageSkills emits a skill_invoked event for the skills a user mentions

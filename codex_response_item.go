@@ -132,6 +132,12 @@ func codexMessageEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexPars
 		if isCodexContextualMessage(resp.Content) {
 			return nil
 		}
+		// Paginated history reports the prompt from the completed UserMessage
+		// item that follows; keep this message's images for it.
+		if p.isPaginated() {
+			p.recordUserImages(codexImages(resp.Content))
+			return nil
+		}
 		return p.promptEvents(codexUserPromptEvents(contentStr, codexImages(resp.Content), ts))
 	case "assistant":
 		return codexAgentMessageEvents(contentStr, ts)

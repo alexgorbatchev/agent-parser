@@ -68,6 +68,8 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 		}), nil
 	case "error":
 		return codexErrorEvents(evt, ts, p), nil
+	case "patch_apply_end":
+		return parseCodexFileChange(payload, ts)
 	}
 	return nil, nil
 }

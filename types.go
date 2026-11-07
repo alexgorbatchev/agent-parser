@@ -16,10 +16,12 @@ type DiffHunk struct {
 
 // FileModification captures structured file changes parsed from agent tool calls.
 type FileModification struct {
-	Action   string     `json:"action"` // "EDIT" | "WRITE"
-	FilePath string     `json:"filePath"`
-	Hunks    []DiffHunk `json:"hunks,omitempty"`
-	Content  *string    `json:"content,omitempty"`
+	Action   string `json:"action"` // "EDIT" | "WRITE" | "DELETE"
+	FilePath string `json:"filePath"`
+	// PreviousPath is the path a moved file had before the change.
+	PreviousPath string     `json:"previousPath,omitempty"`
+	Hunks        []DiffHunk `json:"hunks,omitempty"`
+	Content      *string    `json:"content,omitempty"`
 }
 
 // TokenUsage tracks token consumption metrics for an agent run or turn.

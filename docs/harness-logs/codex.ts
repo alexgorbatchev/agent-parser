@@ -552,6 +552,7 @@ export interface ICodexItemCompletedPayload {
     | ICodexCompletedAgentMessage
     | ICodexCompletedCommandExecution
     | ICodexCompletedUserMessage
+    | ICodexCompletedFileChange
     | Readonly<Record<string, unknown>>;
 }
 
@@ -642,6 +643,41 @@ export interface ICodexUserMessageSkillItem {
  * projects a `request_user_input_async` call: its `id` is that call's `call_id` and its
  * text is the question, which the function_call already reports.
  */
+/** Codex's `FileChange` for one path (`codex-rs/protocol/src/protocol.rs`). */
+export type CodexFileChange =
+  | { readonly type: "add"; readonly content: string }
+  | { readonly type: "delete"; readonly content: string }
+  | { readonly type: "update"; readonly unified_diff: string; readonly move_path: string | null };
+
+export type CodexPatchApplyStatus = "completed" | "failed" | "declined";
+
+/**
+ * Applied patch (`FileChangeItem`) in paginated history. Its `id` is the patch tool
+ * call's `call_id`, or a generated id for a patch applied from code mode. Parsers emit
+ * one `file_modification` per path when `status` is `completed`.
+ */
+export interface ICodexCompletedFileChange {
+  readonly type: "FileChange";
+  readonly id: string;
+  readonly changes: Readonly<Record<string, CodexFileChange>>;
+  readonly status?: CodexPatchApplyStatus;
+  readonly auto_approved?: boolean;
+  readonly stdout?: string;
+  readonly stderr?: string;
+}
+
+/** Applied patch in legacy history (`PatchApplyEndEvent`). */
+export interface ICodexPatchApplyEndPayload {
+  readonly type: "patch_apply_end";
+  readonly call_id: string;
+  readonly turn_id?: string;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly success: boolean;
+  readonly changes: Readonly<Record<string, CodexFileChange>>;
+  readonly status?: CodexPatchApplyStatus;
+}
+
 export interface ICodexCompletedAgentMessage {
   readonly type: "AgentMessage";
   readonly id?: string;
@@ -670,6 +706,7 @@ export type CodexEventMsgPayload =
   | ICodexTaskStartedPayload
   | ICodexTaskCompletePayload
   | ICodexTurnAbortedPayload
+  | ICodexPatchApplyEndPayload
   | ICodexErrorPayload;
 
 /** A turn that stopped before completing (`TurnAbortedEvent`). */

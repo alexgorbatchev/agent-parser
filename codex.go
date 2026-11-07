@@ -255,6 +255,8 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]P
 		return parseCodexCommandExecution(raw, ts)
 	case "UserMessage":
 		return parseCodexUserMessage(raw, ts, p)
+	case "FileChange":
+		return parseCodexFileChange(raw, ts)
 	}
 	if header.Type != "AgentMessage" {
 		return nil, nil

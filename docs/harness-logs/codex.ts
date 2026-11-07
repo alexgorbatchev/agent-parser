@@ -342,7 +342,7 @@ export interface ICodexSessionMetaPayload {
   /** Source classification ("cli" or subagent spawn metadata). */
   readonly source: CodexSessionSource;
   /** Model provider name (e.g. "openai"). Not a model: SessionMeta names no model. */
-  readonly model_provider?: string;
+  readonly model_provider?: string | null;
   /** Base system prompt instructions. */
   readonly base_instructions: {
     readonly text: string;

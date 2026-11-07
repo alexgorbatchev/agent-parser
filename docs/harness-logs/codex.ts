@@ -342,7 +342,7 @@ export interface ICodexSessionMetaPayload {
   /** Source classification ("cli" or subagent spawn metadata). */
   readonly source: CodexSessionSource;
   /** Model provider name (e.g. "openai"). Not a model: SessionMeta names no model. */
-  readonly model_provider: string;
+  readonly model_provider?: string;
   /** Base system prompt instructions. */
   readonly base_instructions: {
     readonly text: string;
@@ -803,8 +803,8 @@ export interface ICodexThreadSettingsAppliedPayload {
   readonly thread_settings: {
     readonly model: string;
     readonly model_provider_id: string;
-    readonly cwd?: string;
-    readonly reasoning_effort?: string | null;
+    readonly cwd: string;
+    readonly reasoning_effort?: string;
     readonly [setting: string]: unknown;
   };
 }

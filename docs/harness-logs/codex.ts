@@ -224,12 +224,18 @@ export type CodexRateLimitReachedType =
   | "workspace_member_usage_limit_reached";
 
 /**
- * Token usage report emitted in `token_count` event messages.
+ * Token usage report emitted in `token_count` event messages. Codex sends one
+ * after every model response and re-sends it unchanged when rate limits
+ * refresh; it never marks the end of a turn.
  */
 export interface ICodexTokenCountInfo {
   /** Cumulative token spend across the entire session. */
   readonly total_token_usage: ICodexTokenBreakdown;
-  /** Token spend for the most recent turn. */
+  /**
+   * Token spend of the most recent model response. When Codex fills usage up
+   * to the context window or re-estimates the context, this holds only an
+   * estimated `total_tokens` with no input or output tokens.
+   */
   readonly last_token_usage: ICodexTokenBreakdown;
   /** Maximum context window size in tokens for the current model. */
   readonly model_context_window: number;

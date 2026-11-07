@@ -309,14 +309,17 @@ func codexQuestionText(input map[string]interface{}) string {
 }
 
 type rawCodexResponseItemPayload struct {
-	Type             string                `json:"type"`
-	Role             string                `json:"role"`
-	Name             string                `json:"name"`
-	CallID           string                `json:"call_id"`
-	Arguments        string                `json:"arguments"`
-	Input            interface{}           `json:"input,omitempty"`
-	Output           rawCodexToolOutput    `json:"output"`
-	Query            string                `json:"query"`
+	Type   string `json:"type"`
+	Role   string `json:"role"`
+	Name   string `json:"name"`
+	CallID string `json:"call_id"`
+	// Arguments is a JSON-encoded string for function calls and a JSON
+	// object for tool_search_call.
+	Arguments json.RawMessage    `json:"arguments"`
+	Input     interface{}        `json:"input,omitempty"`
+	Output    rawCodexToolOutput `json:"output"`
+	// Tools lists the tools a tool_search_output found.
+	Tools            json.RawMessage       `json:"tools"`
 	Content          interface{}           `json:"content"`
 	Summary          []rawCodexSummaryPart `json:"summary"`
 	EncryptedContent string                `json:"encrypted_content"`

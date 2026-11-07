@@ -1656,38 +1656,43 @@ func TestParseCodexLine(t *testing.T) {
 	})
 
 	t.Run("response_item tool_search_call and tool_search_output", func(t *testing.T) {
-		callLine := `{
-			"type": "response_item",
-			"timestamp": "2026-06-12T16:08:51.000Z",
-			"payload": {
-				"type": "tool_search_call",
-				"call_id": "ts_001",
-				"query": "find files matching *.go"
-			}
-		}`
+		// ToolSearchCall carries its arguments as a JSON object and
+		// ToolSearchOutput carries the found tools (codex-rs protocol/src/models.rs).
+		callLine := `{"timestamp":"2026-06-12T16:08:51.000Z","type":"response_item","payload":{"type":"tool_search_call","call_id":"ts_001","status":"completed","execution":"client","arguments":{"query":"spawn a reviewer","limit":5}}}`
 		evs1, err := ParseCodexLine([]byte(callLine))
 		if err != nil || len(evs1) != 1 {
 			t.Fatalf("failed tool_search_call parsing: evs=%v err=%v", evs1, err)
 		}
-		if evs1[0].EventType != "tool_call" || *evs1[0].Data.ToolName != "tool_search" {
+		call := evs1[0].Data
+		if evs1[0].EventType != "tool_call" || *call.ToolName != "tool_search" || *call.ToolCallID != "ts_001" ||
+			call.ToolInput["query"] != "spawn a reviewer" || call.ToolInput["limit"] != float64(5) {
 			t.Errorf("unexpected tool_search_call event: %+v", evs1[0])
 		}
 
-		outLine := `{
-			"type": "response_item",
-			"timestamp": "2026-06-12T16:08:52.000Z",
-			"payload": {
-				"type": "tool_search_output",
-				"call_id": "ts_001",
-				"output": "Found 12 matching files"
-			}
-		}`
+		outLine := `{"timestamp":"2026-06-12T16:08:52.000Z","type":"response_item","payload":{"type":"tool_search_output","call_id":"ts_001","status":"completed","execution":"client","tools":[{"type":"namespace","name":"agents","tools":[{"type":"function","name":"spawn_agent"}]}]}}`
 		evs2, err := ParseCodexLine([]byte(outLine))
 		if err != nil || len(evs2) != 1 {
 			t.Fatalf("failed tool_search_output parsing: evs=%v err=%v", evs2, err)
 		}
-		if evs2[0].EventType != "tool_result" || *evs2[0].Data.ToolCallID != "ts_001" {
+		result := evs2[0].Data
+		want := `[{"type":"namespace","name":"agents","tools":[{"type":"function","name":"spawn_agent"}]}]`
+		if evs2[0].EventType != "tool_result" || *result.ToolCallID != "ts_001" || result.ToolOutput == nil || *result.ToolOutput != want || result.IsError != nil {
 			t.Errorf("unexpected tool_search_output event: %+v", evs2[0])
+		}
+
+		// Codex writes a failed search with status "completed" and no tools.
+		empty := `{"timestamp":"2026-06-12T16:08:52.000Z","type":"response_item","payload":{"type":"tool_search_output","call_id":"ts_002","status":"completed","execution":"client","tools":[]}}`
+		evs3, err := ParseCodexLine([]byte(empty))
+		if err != nil || len(evs3) != 1 || evs3[0].Data.ToolOutput == nil || *evs3[0].Data.ToolOutput != "[]" || evs3[0].Data.IsError != nil {
+			t.Errorf("empty tool_search_output = %+v, %v", evs3, err)
+		}
+	})
+
+	t.Run("function_call arguments that are not a JSON string", func(t *testing.T) {
+		line := `{"timestamp":"2026-06-12T16:08:52.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":{"cmd":"ls"}}}`
+		evs, err := ParseCodexLine([]byte(line))
+		if err != nil || len(evs) != 1 || evs[0].Data.ToolInput != nil {
+			t.Errorf("events = %+v, %v; want a tool_call without input", evs, err)
 		}
 	})
 

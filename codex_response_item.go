@@ -29,7 +29,7 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) (
 				Role:       stringPtr("assistant"),
 				ToolName:   stringPtr("tool_search"),
 				ToolCallID: optionalString(resp.CallID),
-				ToolInput:  map[string]interface{}{"query": resp.Query},
+				ToolInput:  codexJSONObject(resp.Arguments),
 			},
 		}}, nil
 	case "tool_search_output":
@@ -39,7 +39,7 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) (
 			Data: EventData{
 				Role:       stringPtr("toolResult"),
 				ToolCallID: optionalString(resp.CallID),
-				ToolOutput: stringPtr(resp.Output.text),
+				ToolOutput: codexJSONText(resp.Tools),
 			},
 		}}, nil
 	}
@@ -78,9 +78,13 @@ func codexToolCallEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexPar
 // harnesses use for the same values.
 func codexToolInput(resp rawCodexResponseItemPayload) map[string]interface{} {
 	var inputMap map[string]interface{}
-	if resp.Arguments != "" {
-		if err := json.Unmarshal([]byte(resp.Arguments), &inputMap); err != nil {
-			inputMap = map[string]interface{}{"raw": resp.Arguments}
+	var arguments string
+	if len(resp.Arguments) > 0 && json.Unmarshal(resp.Arguments, &arguments) != nil {
+		arguments = ""
+	}
+	if arguments != "" {
+		if err := json.Unmarshal([]byte(arguments), &inputMap); err != nil {
+			inputMap = map[string]interface{}{"raw": arguments}
 		}
 	} else if resp.Input != nil {
 		switch in := resp.Input.(type) {

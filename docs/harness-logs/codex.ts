@@ -966,16 +966,29 @@ export interface ICodexResponseReasoningPayload {
   readonly encrypted_content?: string;
 }
 
+/** Tool search request (`ResponseItem::ToolSearchCall`); `arguments` is a JSON object. */
 export interface ICodexToolSearchCallPayload {
   readonly type: "tool_search_call";
-  readonly call_id: string;
-  readonly query: string;
+  readonly id?: string;
+  readonly call_id: string | null;
+  readonly status?: string;
+  /** "client" or "server". */
+  readonly execution: string;
+  /** For example `{ query, limit }`. */
+  readonly arguments: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * Tool search result (`ResponseItem::ToolSearchOutput`). Codex writes `status: "completed"`
+ * with an empty `tools` list even when the search failed, so it records no outcome.
+ */
 export interface ICodexToolSearchOutputPayload {
   readonly type: "tool_search_output";
-  readonly call_id: string;
-  readonly results: readonly unknown[];
+  readonly id?: string;
+  readonly call_id: string | null;
+  readonly status: string;
+  readonly execution: string;
+  readonly tools: readonly unknown[];
 }
 
 export type CodexResponseItemPayload =

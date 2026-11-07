@@ -43,7 +43,7 @@ type rawCodexToolItem struct {
 	// ImageView
 	Path string `json:"path"`
 
-	// fields holds the item's raw fields, an extension's input.
+	// fields holds an extension item's raw fields, its input.
 	fields map[string]interface{}
 }
 
@@ -58,8 +58,10 @@ func parseCodexToolItem(kind string, raw json.RawMessage, ts int64, startedAt *i
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed %s: %w", kind, err)
 	}
-	if err := json.Unmarshal(raw, &item.fields); err != nil {
-		return nil, fmt.Errorf("unmarshaling completed %s: %w", kind, err)
+	if kind == "Extension" {
+		if err := json.Unmarshal(raw, &item.fields); err != nil {
+			return nil, fmt.Errorf("unmarshaling completed %s: %w", kind, err)
+		}
 	}
 	var skills []ParsedEvent
 	if kind == "CommandExecution" {

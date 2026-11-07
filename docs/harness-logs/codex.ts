@@ -558,6 +558,7 @@ export interface ICodexItemCompletedPayload {
     | ICodexCompletedExtension
     | ICodexCompletedImageView
     | ICodexCompletedDynamicToolCall
+    | ICodexCompletedCollabAgentToolCall
     | Readonly<Record<string, unknown>>;
 }
 
@@ -610,6 +611,34 @@ export interface ICodexCompletedImageView {
   readonly type: "ImageView";
   readonly id: string;
   readonly path: string;
+}
+
+/**
+ * Collaboration tool call (`CollabAgentToolCallItem`). Its `id` is the collaboration tool
+ * call's `call_id`; parsers read only its `status` as that call's outcome
+ * (`interrupted` leaves it unknown).
+ */
+export interface ICodexCompletedCollabAgentToolCall {
+  readonly type: "CollabAgentToolCall";
+  readonly id: string;
+  readonly tool:
+    | "spawn_agent"
+    | "send_input"
+    | "resume_agent"
+    | "wait"
+    | "close_agent"
+    | "send_message"
+    | "followup_task"
+    | "interrupt_agent"
+    | (string & {});
+  readonly status: "in_progress" | "completed" | "failed" | "interrupted";
+  readonly sender_thread_id: string;
+  readonly receiver_thread_ids: readonly string[];
+  readonly receiver_agents: readonly unknown[];
+  readonly prompt?: string | null;
+  readonly model?: string | null;
+  readonly reasoning_effort?: string | null;
+  readonly agents_states: Readonly<Record<string, unknown>>;
 }
 
 export interface ICodexCompletedDynamicToolCall {

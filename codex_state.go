@@ -223,6 +223,9 @@ func (p *CodexParser) endTurn() []ParsedEvent {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.turnOpen = false
+	// A tool call's output comes within its turn; an outcome still unused at
+	// the turn's end belongs to an output that arrived before its item.
+	p.callOutcomes = nil
 	start := p.pendingTurnStart
 	p.pendingTurnStart = nil
 	if start == nil {

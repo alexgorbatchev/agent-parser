@@ -238,3 +238,25 @@ func TestCodexUserShellCommandIsNotAToolCall(t *testing.T) {
 		t.Errorf("events = %+v, %v; want none for a command the user ran", evs, err)
 	}
 }
+
+func TestCodexUnusedItemOutcomeEndsWithTheTurn(t *testing.T) {
+	p := NewCodexParser()
+	lines := []string{
+		codexPaginatedMeta,
+		`{"timestamp":"2026-11-07T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":1794045601}}`,
+		`{"timestamp":"2026-11-07T10:00:02Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_1"}}`,
+		// The output arrives first, while the process still runs; the item
+		// with the final exit code follows.
+		`{"timestamp":"2026-11-07T10:00:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Chunk ID: a\nWall time: 1.0 seconds\nProcess running with session ID 4\nOutput:\n"}}`,
+		codexItemLine(`{"type":"CommandExecution","id":"call_1","command":["make"],"status":"failed","exit_code":2}`),
+		`{"timestamp":"2026-11-07T10:00:09Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":1794045609}}`,
+	}
+	for _, line := range lines {
+		if _, err := p.ParseLine([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p.takeCallOutcome("call_1") != nil {
+		t.Error("an unused outcome outlived its turn")
+	}
+}

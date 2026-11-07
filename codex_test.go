@@ -232,8 +232,9 @@ func TestParseCodexLine(t *testing.T) {
 		if e.Data.Title == nil || *e.Data.Title != "Codex Session sess-root-123" {
 			t.Errorf("Title = %v, want 'Codex Session sess-root-123'", e.Data.Title)
 		}
-		if e.Data.Model == nil || *e.Data.Model != "openai" {
-			t.Errorf("Model = %v, want 'openai'", e.Data.Model)
+		// SessionMeta names only the provider, which is not a model.
+		if e.Data.Model != nil {
+			t.Errorf("Model = %q, want none", *e.Data.Model)
 		}
 	})
 
@@ -2269,4 +2270,37 @@ func derefInt(n *int) interface{} {
 		return nil
 	}
 	return *n
+}
+
+func TestCodexModelFromThreadSettings(t *testing.T) {
+	p := NewCodexParser()
+	lines := []string{
+		`{"timestamp":"2026-11-07T10:00:00Z","type":"session_meta","payload":{"id":"t","cwd":"/work","source":"cli","model_provider":"openai","history_mode":"paginated"}}`,
+		`{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"t","thread_settings":{"model":"gpt-test","model_provider_id":"openai","cwd":"/work","reasoning_effort":"medium"}}}`,
+		`{"timestamp":"2026-11-07T10:00:05Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":15},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":15},"model_context_window":258400}}}`,
+	}
+	var got []string
+	for _, line := range lines {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			model := "<none>"
+			if ev.Data.Model != nil {
+				model = *ev.Data.Model
+			}
+			got = append(got, ev.EventType+":"+model)
+		}
+	}
+	want := []string{"run_started:<none>", "model_change:gpt-test", "usage:gpt-test"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+
+	// Settings without a model report nothing.
+	empty := `{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":""}}}`
+	if evs, err := ParseCodexLine([]byte(empty)); err != nil || len(evs) != 0 {
+		t.Errorf("empty settings = %+v, %v", evs, err)
+	}
 }

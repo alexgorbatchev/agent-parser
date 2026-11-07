@@ -148,8 +148,6 @@ type rawCodexSessionMetaPayload struct {
 	Originator       string      `json:"originator"`
 	CLIVersion       string      `json:"cli_version"`
 	Source           interface{} `json:"source"`
-	Model            string      `json:"model,omitempty"`
-	ModelProvider    string      `json:"model_provider"`
 	BaseInstructions *struct {
 		Text string `json:"text"`
 	} `json:"base_instructions"`
@@ -211,6 +209,8 @@ type rawCodexEventMsgPayload struct {
 	CodexErrorInfo   interface{} `json:"codex_error_info,omitempty"`
 	// Reason is why a turn_aborted turn stopped (TurnAbortReason).
 	Reason string `json:"reason,omitempty"`
+	// ThreadSettings is the snapshot a thread_settings_applied event applies.
+	ThreadSettings *rawCodexThreadSettings `json:"thread_settings,omitempty"`
 	// Error describes why a task_complete or turn_aborted turn failed.
 	Error              *rawCodexErrorEvent     `json:"error,omitempty"`
 	Info               *rawCodexTokenCountInfo `json:"info"`

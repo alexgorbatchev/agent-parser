@@ -30,23 +30,15 @@ func parseCodexSessionMeta(payload json.RawMessage, ts int64, p *CodexParser) ([
 		sessionID = meta.SessionID
 	}
 
-	var modelPtr *string
-	if meta.Model != "" {
-		modelPtr = stringPtr(meta.Model)
-		p.setModel(meta.Model)
-	} else if meta.ModelProvider != "" {
-		modelPtr = stringPtr(meta.ModelProvider)
-		p.setModel(meta.ModelProvider)
-	}
-
 	return []ParsedEvent{{
 		EventType: "run_started",
 		Timestamp: ts,
 		CWD:       meta.CWD,
 		GitBranch: gitBranch,
 		Data: EventData{
+			// SessionMeta names no model; turn_context and
+			// thread_settings_applied report it.
 			Title: stringPtr(codexSessionTitle(sessionID, parentThreadID, nickname, role)),
-			Model: modelPtr,
 		},
 	}}, nil
 }
@@ -134,4 +126,26 @@ func parseCodexTurnContext(payload json.RawMessage, ts int64, p *CodexParser) ([
 			Model: stringPtr(ctx.Model),
 		},
 	}}, nil
+}
+
+// rawCodexThreadSettings is the thread_settings of a thread_settings_applied
+// event (ThreadSettingsSnapshot).
+type rawCodexThreadSettings struct {
+	Model string `json:"model"`
+	CWD   string `json:"cwd"`
+}
+
+// codexThreadSettingsEvents turns the model a thread_settings_applied event
+// names into model_change.
+func codexThreadSettingsEvents(settings *rawCodexThreadSettings, ts int64, p *CodexParser) []ParsedEvent {
+	if settings == nil || settings.Model == "" {
+		return nil
+	}
+	p.setModel(settings.Model)
+	return []ParsedEvent{{
+		EventType: "model_change",
+		Timestamp: ts,
+		CWD:       settings.CWD,
+		Data:      EventData{Model: stringPtr(settings.Model)},
+	}}
 }

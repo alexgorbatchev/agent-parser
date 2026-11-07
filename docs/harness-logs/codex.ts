@@ -683,8 +683,7 @@ export type CodexToolOutputContentItem =
  *   `format_script_status`): first line `Script completed`, `Script failed`,
  *   `Script terminated`, or `Script running with cell ID <id>`, followed by a
  *   `Wall time …` line and `Output:`. A failed script also gets a
- *   `Script error:
-<message>` item.
+ *   `Script error:\n<message>` item.
  * - Unified `exec_command`/`write_stdin` (`core/src/tools/context.rs`,
  *   `response_header`): header lines `Chunk ID: <id>` (optional),
  *   `Wall time: <s> seconds`, then `Process exited with code <n>` or

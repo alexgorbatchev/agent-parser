@@ -3,7 +3,6 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // parseCodexResponseItem dispatches a response_item record by its payload type.
@@ -113,20 +112,14 @@ func codexToolInput(resp rawCodexResponseItemPayload) map[string]interface{} {
 }
 
 func codexToolOutputEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedEvent {
-	output := resp.Output.text
-	lower := strings.ToLower(output)
-	isErr := strings.Contains(lower, "exit code: 1") ||
-		strings.Contains(lower, "error:") ||
-		strings.Contains(lower, "command failed")
-
 	return []ParsedEvent{{
 		EventType: "tool_result",
 		Timestamp: ts,
 		Data: EventData{
 			Role:       stringPtr("toolResult"),
 			ToolCallID: optionalString(resp.CallID),
-			ToolOutput: stringPtr(output),
-			IsError:    boolPtr(isErr),
+			ToolOutput: stringPtr(resp.Output.text),
+			IsError:    codexToolFailed(resp.Output.head),
 			Images:     resp.Output.images,
 		},
 	}}

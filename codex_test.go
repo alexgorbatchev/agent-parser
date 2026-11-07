@@ -1848,8 +1848,9 @@ func TestParseCodexLine(t *testing.T) {
 		if *evs[0].Data.ToolCallID != "call_mcp_001" || *evs[0].Data.ToolOutput != "Element clicked successfully" {
 			t.Errorf("ToolCallID/ToolOutput mismatch: %+v", evs[0].Data)
 		}
-		if *evs[0].Data.IsError != false {
-			t.Errorf("expected IsError=false, got true")
+		// The output carries no Codex status header, so the outcome is unknown.
+		if evs[0].Data.IsError != nil {
+			t.Errorf("IsError = %v, want nil", *evs[0].Data.IsError)
 		}
 	})
 }

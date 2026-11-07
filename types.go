@@ -56,15 +56,18 @@ type EventData struct {
 	FileModification   *FileModification      `json:"fileModification,omitempty"`
 	ToolOutput         *string                `json:"toolOutput,omitempty"`
 	Images             []Image                `json:"images,omitempty"`
-	IsError            *bool                  `json:"isError,omitempty"`
-	IsRateLimit        *bool                  `json:"isRateLimit,omitempty"`
-	RateLimitResetAt   *int64                 `json:"rateLimitResetAt,omitempty"`
-	RetryAfterSeconds  *int64                 `json:"retryAfterSeconds,omitempty"`
-	ExitCode           *int                   `json:"exitCode,omitempty"`
-	Question           *string                `json:"question,omitempty"`
-	StopReason         *string                `json:"stopReason,omitempty"`
-	Usage              *TokenUsage            `json:"usage,omitempty"`
-	RawHarnessCost     *float64               `json:"rawHarnessCost,omitempty"`
+	// IsError reports whether the event records a failure. On tool_result it
+	// is nil when the transcript does not record the call's outcome, such as a
+	// Codex call that is still running, was aborted, or has no status header.
+	IsError           *bool       `json:"isError,omitempty"`
+	IsRateLimit       *bool       `json:"isRateLimit,omitempty"`
+	RateLimitResetAt  *int64      `json:"rateLimitResetAt,omitempty"`
+	RetryAfterSeconds *int64      `json:"retryAfterSeconds,omitempty"`
+	ExitCode          *int        `json:"exitCode,omitempty"`
+	Question          *string     `json:"question,omitempty"`
+	StopReason        *string     `json:"stopReason,omitempty"`
+	Usage             *TokenUsage `json:"usage,omitempty"`
+	RawHarnessCost    *float64    `json:"rawHarnessCost,omitempty"`
 	// MessageUUID is the UUID a sender gave a Claude Code message. It is set on
 	// turn_start and on message_absorbed.
 	MessageUUID *string `json:"messageUuid,omitempty"`

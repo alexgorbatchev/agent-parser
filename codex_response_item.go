@@ -6,7 +6,7 @@ import (
 )
 
 // parseCodexResponseItem dispatches a response_item record by its payload type.
-func parseCodexResponseItem(payload json.RawMessage, ts int64) ([]ParsedEvent, error) {
+func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) ([]ParsedEvent, error) {
 	var resp rawCodexResponseItemPayload
 	if err := json.Unmarshal(payload, &resp); err != nil {
 		return nil, fmt.Errorf("unmarshaling response_item payload: %w", err)
@@ -18,7 +18,7 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64) ([]ParsedEvent, e
 	case "function_call_output", "custom_tool_call_output":
 		return codexToolOutputEvents(resp, ts), nil
 	case "message":
-		return codexMessageEvents(resp, ts), nil
+		return codexMessageEvents(resp, ts, p), nil
 	case "reasoning":
 		return codexThinkingEvents(resp.Summary, ts), nil
 	case "tool_search_call":
@@ -125,11 +125,11 @@ func codexToolOutputEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedE
 	}}
 }
 
-func codexMessageEvents(resp rawCodexResponseItemPayload, ts int64) []ParsedEvent {
+func codexMessageEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexParser) []ParsedEvent {
 	contentStr := extractContentString(resp.Content)
 	switch resp.Role {
 	case "user":
-		return codexUserPromptEvents(contentStr, codexImages(resp.Content), ts)
+		return p.promptEvents(codexUserPromptEvents(contentStr, codexImages(resp.Content), ts))
 	case "assistant":
 		return codexAgentMessageEvents(contentStr, ts)
 	}

@@ -196,20 +196,30 @@ type rawCodexTokenCountInfo struct {
 }
 
 type rawCodexEventMsgPayload struct {
-	Item               json.RawMessage         `json:"item,omitempty"`
-	Type               string                  `json:"type"`
-	Message            string                  `json:"message"`
-	TurnID             string                  `json:"turn_id"`
-	StartedAt          json.RawMessage         `json:"started_at"`
-	CompletedAt        json.RawMessage         `json:"completed_at"`
-	DurationMS         int64                   `json:"duration_ms"`
-	LastAgentMessage   string                  `json:"last_agent_message"`
-	CodexErrorInfo     interface{}             `json:"codex_error_info,omitempty"`
+	Item             json.RawMessage `json:"item,omitempty"`
+	Type             string          `json:"type"`
+	Message          string          `json:"message"`
+	TurnID           string          `json:"turn_id"`
+	StartedAt        json.RawMessage `json:"started_at"`
+	CompletedAt      json.RawMessage `json:"completed_at"`
+	DurationMS       int64           `json:"duration_ms"`
+	LastAgentMessage string          `json:"last_agent_message"`
+	CodexErrorInfo   interface{}     `json:"codex_error_info,omitempty"`
+	// Reason is why a turn_aborted turn stopped (TurnAbortReason).
+	Reason string `json:"reason,omitempty"`
+	// Error describes why a task_complete or turn_aborted turn failed.
+	Error              *rawCodexErrorEvent     `json:"error,omitempty"`
 	Info               *rawCodexTokenCountInfo `json:"info"`
 	RateLimits         *rawCodexRateLimits     `json:"rate_limits,omitempty"`
 	ModelContextWindow int64                   `json:"model_context_window,omitempty"`
 	Summary            []rawCodexSummaryPart   `json:"summary"`
 	EncryptedContent   string                  `json:"encrypted_content"`
+}
+
+// rawCodexErrorEvent is Codex's ErrorEvent as stored on turn completions.
+type rawCodexErrorEvent struct {
+	Message        string      `json:"message"`
+	CodexErrorInfo interface{} `json:"codex_error_info,omitempty"`
 }
 
 // rawCodexSummaryPart is one part of a reasoning summary.
@@ -334,6 +344,11 @@ type CodexParser struct {
 	// subagent_history_start_ordinal.
 	sessionMetaSeen     bool
 	historyStartOrdinal *uint64
+	// turnOpen is set between task_started and the turn's completion or abort.
+	// pendingTurnStart holds the turn's turn_start until its first prompt or
+	// other event arrives, so the prompt can be reported on it.
+	turnOpen         bool
+	pendingTurnStart *ParsedEvent
 }
 
 // NewCodexParser creates a new stateful parser stream for Codex transcripts.
@@ -352,6 +367,8 @@ func (p *CodexParser) Reset() {
 	p.lastTotalUsage = nil
 	p.sessionMetaSeen = false
 	p.historyStartOrdinal = nil
+	p.turnOpen = false
+	p.pendingTurnStart = nil
 }
 
 // ParseLine parses a single line using this CodexParser instance.
@@ -381,17 +398,41 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 
 	ts := parseTimestamp(raw.Timestamp)
 
+	pending := p.pendingTurn()
+
+	var events []ParsedEvent
+	var err error
 	switch raw.Type {
 	case "session_meta":
-		return parseCodexSessionMeta(raw.Payload, ts, p)
+		events, err = parseCodexSessionMeta(raw.Payload, ts, p)
 	case "turn_context":
-		return parseCodexTurnContext(raw.Payload, ts, p)
+		events, err = parseCodexTurnContext(raw.Payload, ts, p)
 	case "event_msg":
-		return parseCodexEventMsg(raw.Payload, ts, p)
+		events, err = parseCodexEventMsg(raw.Payload, ts, p)
 	case "response_item":
-		return parseCodexResponseItem(raw.Payload, ts)
+		events, err = parseCodexResponseItem(raw.Payload, ts, p)
 	}
-	return nil, nil
+	if err != nil {
+		return nil, err
+	}
+	// The first activity of a turn reports the turn's pending start ahead of
+	// it. A model change from turn_context, which Codex writes before the
+	// turn's prompt, is not activity.
+	if codexIsTurnActivity(events) {
+		if start := p.takePendingTurnStart(pending); start != nil {
+			events = append([]ParsedEvent{*start}, events...)
+		}
+	}
+	return events, nil
+}
+
+func codexIsTurnActivity(events []ParsedEvent) bool {
+	for _, ev := range events {
+		if ev.EventType != "model_change" {
+			return true
+		}
+	}
+	return false
 }
 
 func extractInt(v interface{}) *int {

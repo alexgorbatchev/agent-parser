@@ -50,13 +50,13 @@ func (p *CodexParser) recordTokenCountRateLimits(resetAt, retrySec *int64, rateL
 
 // recordErrorRateLimits updates the cached rate-limit reset from an error
 // record's own rate-limit payload, then expires a reset that has passed.
-func (p *CodexParser) recordErrorRateLimits(hasRateLimits bool, resetAt, retrySec *int64, ts int64) {
+func (p *CodexParser) recordErrorRateLimits(resetAt, retrySec *int64, ts int64) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if hasRateLimits && resetAt != nil {
+	if resetAt != nil {
 		p.rateLimitResetAt = resetAt
 		p.retryAfterSeconds = retrySec
 	}
@@ -75,9 +75,6 @@ func (p *CodexParser) pendingRateLimitReset(ts int64) (*int64, *int64) {
 		return nil, nil
 	}
 	remSec := (*p.rateLimitResetAt - ts + 999) / 1000
-	if remSec <= 0 {
-		return p.rateLimitResetAt, nil
-	}
 	return p.rateLimitResetAt, &remSec
 }
 
@@ -132,4 +129,100 @@ func (p *CodexParser) isInheritedHistory(ordinal *uint64) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.historyStartOrdinal != nil && *ordinal < *p.historyStartOrdinal
+}
+
+// beginTurn opens a turn at task_started. The stateful parser holds its
+// turn_start until the turn's first prompt or other event; the stateless path
+// reports it at once. A turn that was still open is reported if it never was.
+func (p *CodexParser) beginTurn(start ParsedEvent) []ParsedEvent {
+	if p == nil {
+		return []ParsedEvent{start}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var events []ParsedEvent
+	if p.pendingTurnStart != nil {
+		events = append(events, *p.pendingTurnStart)
+	}
+	p.turnOpen = true
+	p.pendingTurnStart = &start
+	return events
+}
+
+// promptEvents places a user prompt in the open turn. The turn's first prompt
+// is reported on its turn_start; a later prompt in the same turn is input
+// absorbed into it and is reported as message_absorbed. A prompt outside a
+// task turn, as in rollouts without task events, starts a turn itself.
+func (p *CodexParser) promptEvents(prompt []ParsedEvent) []ParsedEvent {
+	if p == nil || len(prompt) == 0 {
+		return prompt
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	data := prompt[0].Data
+	switch {
+	case p.pendingTurnStart != nil:
+		start := *p.pendingTurnStart
+		p.pendingTurnStart = nil
+		start.Data.Role = data.Role
+		start.Data.Content = data.Content
+		start.Data.LastPrompt = data.LastPrompt
+		start.Data.Title = data.Title
+		start.Data.Images = data.Images
+		return []ParsedEvent{start}
+	case p.turnOpen:
+		return []ParsedEvent{{
+			EventType: "message_absorbed",
+			Timestamp: prompt[0].Timestamp,
+			Data: EventData{
+				Role:    data.Role,
+				Content: data.Content,
+				Images:  data.Images,
+			},
+		}}
+	}
+	return prompt
+}
+
+// pendingTurn returns the turn_start the open turn is holding, if any.
+func (p *CodexParser) pendingTurn() *ParsedEvent {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pendingTurnStart
+}
+
+// takePendingTurnStart returns the held turn_start if it is still the one
+// held before the current record, so a turn opened by this record is not
+// reported before it begins.
+func (p *CodexParser) takePendingTurnStart(before *ParsedEvent) *ParsedEvent {
+	if p == nil || before == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pendingTurnStart != before {
+		return nil
+	}
+	p.pendingTurnStart = nil
+	return before
+}
+
+// endTurn closes the open turn and returns its turn_start if no event has
+// reported it yet.
+func (p *CodexParser) endTurn() []ParsedEvent {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.turnOpen = false
+	start := p.pendingTurnStart
+	p.pendingTurnStart = nil
+	if start == nil {
+		return nil
+	}
+	return []ParsedEvent{*start}
 }

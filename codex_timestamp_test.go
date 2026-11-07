@@ -29,7 +29,8 @@ func TestCodexTaskTimestamps(t *testing.T) {
 		} {
 			t.Run(event.kind+"/"+tt.name, func(t *testing.T) {
 				line := fmt.Sprintf(`{"type":"event_msg","timestamp":"2026-10-11T19:38:23.999Z","payload":{"type":%q,%q:%s}}`, event.kind, event.field, tt.value)
-				events, err := NewCodexParser().ParseLine([]byte(line))
+				// The stateless parser reports turn boundaries as they arrive.
+				events, err := ParseCodexLine([]byte(line))
 				if (err != nil) != tt.wantErr {
 					t.Fatalf("ParseLine error = %v, wantErr %v", err, tt.wantErr)
 				}

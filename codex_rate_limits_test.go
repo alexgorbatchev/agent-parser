@@ -119,8 +119,9 @@ func TestCodexQuotaOnlySnapshotDoesNotCompleteTurn(t *testing.T) {
 		t.Run(fmt.Sprintf("used_%d", used), func(t *testing.T) {
 			p := NewCodexParser()
 			start := `{"timestamp":"2026-10-22T22:55:31Z","type":"event_msg","payload":{"type":"task_started"}}`
+			// The turn's start is held until the turn's first event.
 			events, err := p.ParseLine([]byte(start))
-			if err != nil || len(events) != 1 || events[0].EventType != "turn_start" {
+			if err != nil || len(events) != 0 {
 				t.Fatalf("task start = %v, %v", events, err)
 			}
 			quota := fmt.Sprintf(`{"timestamp":"2026-10-22T22:55:32Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":%d,"resets_at":1792709792}}}}`, used)
@@ -130,9 +131,10 @@ func TestCodexQuotaOnlySnapshotDoesNotCompleteTurn(t *testing.T) {
 			}
 			failure := `{"timestamp":"2026-10-22T22:55:34Z","type":"event_msg","payload":{"type":"error","codex_error_info":"RateLimitExceeded","message":"limit reached"}}`
 			events, err = p.ParseLine([]byte(failure))
-			if err != nil || len(events) != 1 || events[0].EventType != "error" {
-				t.Fatalf("error = %v, %v", events, err)
+			if err != nil || len(events) != 2 || events[0].EventType != "turn_start" || events[1].EventType != "error" {
+				t.Fatalf("error = %v, %v; want the turn start, then the error", events, err)
 			}
+			events = events[1:]
 			if used == 100 {
 				if events[0].Data.RetryAfterSeconds == nil || *events[0].Data.RetryAfterSeconds != 58 {
 					t.Fatalf("quota update was not cached: %+v", events[0].Data)

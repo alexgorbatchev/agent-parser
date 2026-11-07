@@ -459,7 +459,9 @@ export interface ICodexTaskStartedPayload {
 export interface ICodexTaskCompletePayload {
   readonly type: "task_complete";
   readonly turn_id: string;
-  readonly last_agent_message?: string;
+  readonly last_agent_message?: string | null;
+  /** Present when the turn completed unsuccessfully. */
+  readonly error?: ICodexTurnError;
   /** Unix seconds in native rollouts; RFC3339 strings also occur. */
   readonly started_at?: number | string | null;
   readonly completed_at?: number | string | null;
@@ -467,30 +469,65 @@ export interface ICodexTaskCompletePayload {
 }
 
 /**
- * Structured error information emitted by Codex in error events.
- * Grounded in upstream `codex-rs/protocol/src/protocol.rs:2068-2071`.
- * Variants include rate limit exhaustion, account usage limits, server overload,
- * and HTTP connection failure with response status codes.
+ * Codex's `CodexErrorInfo` (`codex-rs/protocol/src/protocol.rs`), serialized
+ * as a snake_case string for unit variants and as an object keyed by the
+ * variant for variants with fields. PascalCase and `{type, http_status_code}`
+ * forms are also accepted by the parser. Only `rate_limit_exceeded`, or an
+ * HTTP status of 429, is a rate limit.
  */
+export type CodexErrorKind =
+  | "context_window_exceeded"
+  | "session_budget_exceeded"
+  | "usage_limit_exceeded"
+  | "rate_limit_exceeded"
+  | "flex_unavailable"
+  | "server_overloaded"
+  | "model_not_found"
+  | "policy_capacity_unavailable"
+  | "cyber_policy"
+  | "bio_policy"
+  | "misalignment_policy_violation"
+  | "too_many_denials"
+  | "internal_server_error"
+  | "unauthorized"
+  | "bad_request"
+  | "invalid_prompt"
+  | "sandbox_error"
+  | "thread_rollback_failed"
+  | "other";
+
+/** Variants that carry the HTTP status of the failed response. */
+export type CodexHttpErrorKind =
+  | "http_connection_failed"
+  | "response_stream_connection_failed"
+  | "response_stream_disconnected"
+  | "response_too_many_failed_attempts";
+
 export type CodexErrorInfo =
+  | CodexErrorKind
   | "RateLimitExceeded"
   | "UsageLimitExceeded"
   | "ServerOverloaded"
-  | "rate_limit_exceeded"
-  | "usage_limit_exceeded"
-  | "server_overloaded"
   | {
-      readonly HttpConnectionFailed?: {
-        readonly http_status_code?: number;
-      };
-      readonly http_connection_failed?: {
-        readonly http_status_code?: number;
+      readonly [K in CodexHttpErrorKind]?: {
+        readonly http_status_code?: number | null;
       };
     }
   | {
-      readonly type: "HttpConnectionFailed" | "http_connection_failed";
+      readonly active_turn_not_steerable: {
+        readonly turn_kind: string;
+      };
+    }
+  | {
+      readonly type: string;
       readonly http_status_code?: number;
     };
+
+/** Codex's `ErrorEvent` as stored on a failed turn. */
+export interface ICodexTurnError {
+  readonly message: string;
+  readonly codex_error_info?: CodexErrorInfo | null;
+}
 
 export interface ICodexErrorPayload {
   readonly type: "error";
@@ -594,7 +631,20 @@ export type CodexEventMsgPayload =
   | ICodexTokenCountPayload
   | ICodexTaskStartedPayload
   | ICodexTaskCompletePayload
+  | ICodexTurnAbortedPayload
   | ICodexErrorPayload;
+
+/** A turn that stopped before completing (`TurnAbortedEvent`). */
+export interface ICodexTurnAbortedPayload {
+  readonly type: "turn_aborted";
+  readonly turn_id?: string | null;
+  readonly reason: "interrupted" | "replaced" | "review_ended" | "budget_limited";
+  readonly error?: ICodexTurnError;
+  /** Unix seconds. */
+  readonly started_at?: number | null;
+  readonly completed_at?: number | null;
+  readonly duration_ms?: number | null;
+}
 
 export interface ICodexEventMsgRecord {
   readonly type: "event_msg";

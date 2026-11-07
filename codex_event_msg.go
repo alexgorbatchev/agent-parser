@@ -3,7 +3,9 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 )
 
 // parseCodexEventMsg dispatches an event_msg record by its payload type.
@@ -17,7 +19,7 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 	case "item_completed":
 		return parseCodexCompletedItem(evt.Item, ts)
 	case "user_message":
-		return codexUserPromptEvents(evt.Message, nil, ts), nil
+		return p.promptEvents(codexUserPromptEvents(evt.Message, nil, ts)), nil
 	case "agent_message":
 		return codexAgentMessageEvents(evt.Message, ts), nil
 	case "reasoning":
@@ -29,13 +31,13 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 		if err != nil {
 			return nil, fmt.Errorf("parsing task started_at: %w", err)
 		}
-		return []ParsedEvent{{
+		return p.beginTurn(ParsedEvent{
 			EventType: "turn_start",
 			Timestamp: startedAt,
 			Data: EventData{
 				Role: stringPtr("assistant"),
 			},
-		}}, nil
+		}), nil
 	case "task_complete":
 		completedAt, err := parseCodexTaskTimestamp(evt.CompletedAt, ts)
 		if err != nil {
@@ -45,18 +47,36 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 		if evt.LastAgentMessage != "" {
 			contentPtr = stringPtr(evt.LastAgentMessage)
 		}
-		return []ParsedEvent{{
-			EventType: "turn_end",
-			Timestamp: completedAt,
-			Data: EventData{
-				Role:    stringPtr("assistant"),
-				Content: contentPtr,
-			},
-		}}, nil
+		return codexTurnEndEvents(evt, completedAt, p, EventData{
+			Role:    stringPtr("assistant"),
+			Content: contentPtr,
+		}), nil
+	case "turn_aborted":
+		abortedAt, err := parseCodexTaskTimestamp(evt.CompletedAt, ts)
+		if err != nil {
+			return nil, fmt.Errorf("parsing turn_aborted completed_at: %w", err)
+		}
+		return codexTurnEndEvents(evt, abortedAt, p, EventData{
+			Role:       stringPtr("assistant"),
+			StopReason: optionalString(evt.Reason),
+		}), nil
 	case "error":
 		return codexErrorEvents(evt, ts, p), nil
 	}
 	return nil, nil
+}
+
+// codexTurnEndEvents ends the open turn: its pending start if no event
+// reported it yet, an error event when the turn failed, then turn_end.
+func codexTurnEndEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser, data EventData) []ParsedEvent {
+	events := p.endTurn()
+	if evt.Error != nil {
+		events = append(events, codexErrorEvents(rawCodexEventMsgPayload{
+			Message:        evt.Error.Message,
+			CodexErrorInfo: evt.Error.CodexErrorInfo,
+		}, ts, p)...)
+	}
+	return append(events, ParsedEvent{EventType: "turn_end", Timestamp: ts, Data: data})
 }
 
 // codexUserPromptEvents emits turn_start for a user prompt that still has text
@@ -200,7 +220,7 @@ func codexErrorEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser) []P
 	if evt.RateLimits != nil {
 		lineResetAt, lineRetrySec = selectCodexRateLimitReset(evt.RateLimits, ts)
 	}
-	p.recordErrorRateLimits(evt.RateLimits != nil, lineResetAt, lineRetrySec, ts)
+	p.recordErrorRateLimits(lineResetAt, lineRetrySec, ts)
 
 	var errResetAt, errRetrySec *int64
 	switch {
@@ -234,59 +254,103 @@ func codexErrorEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser) []P
 }
 
 // classifyCodexErrorInfo reads whether a codex_error_info value names a rate
-// limit, and any HTTP status code it carries.
+// limit, and any HTTP status code it carries. Codex serializes CodexErrorInfo
+// as a snake_case string for unit variants and as an object keyed by the
+// variant for variants with fields, such as
+// {"http_connection_failed":{"http_status_code":429}}. A status code decides
+// the rate-limit flag; otherwise the variant does. Keys are read in sorted
+// order so the result does not depend on map iteration.
 func classifyCodexErrorInfo(errorInfo interface{}) (*bool, *int) {
-	var isRL *bool
-	var httpStatusCode *int
-
-	setFromStatus := func(v interface{}) {
-		if code := extractInt(v); code != nil {
-			httpStatusCode = code
-			isRL = boolPtr(*code == 429)
-		}
-	}
-
+	var kindRL *bool
+	var status *int
 	switch info := errorInfo.(type) {
 	case string:
-		if rl, known := codexErrorKindIsRateLimit(info); known {
-			isRL = boolPtr(rl)
-		}
+		kindRL = codexErrorKindIsRateLimit(info)
 	case map[string]interface{}:
-		for k, v := range info {
+		keys := make([]string, 0, len(info))
+		for k := range info {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := info[k]
 			switch k {
-			case "type":
-				if s, ok := v.(string); ok {
-					if rl, known := codexErrorKindIsRateLimit(s); known {
-						isRL = boolPtr(rl)
-					}
-				}
-			case "HttpConnectionFailed", "http_connection_failed":
-				if subMap, ok := v.(map[string]interface{}); ok {
-					if sc, ok := subMap["http_status_code"]; ok && sc != nil {
-						setFromStatus(sc)
-					}
-				}
 			case "http_status_code":
-				setFromStatus(v)
+				if status == nil {
+					status = extractInt(v)
+				}
+			case "type":
+				if s, ok := v.(string); ok && kindRL == nil {
+					kindRL = codexErrorKindIsRateLimit(s)
+				}
 			default:
-				if rl, known := codexErrorKindIsRateLimit(k); known {
-					isRL = boolPtr(rl)
+				if kindRL == nil {
+					kindRL = codexErrorKindIsRateLimit(k)
+				}
+				if fields, ok := v.(map[string]interface{}); ok && status == nil {
+					if sc, ok := fields["http_status_code"]; ok && sc != nil {
+						status = extractInt(sc)
+					}
 				}
 			}
 		}
 	}
-	return isRL, httpStatusCode
+	if status != nil {
+		return boolPtr(*status == 429), status
+	}
+	return kindRL, nil
 }
 
-// codexErrorKindIsRateLimit reports whether an error kind is a rate limit, and
-// whether the kind is one this parser classifies at all.
-func codexErrorKindIsRateLimit(kind string) (isRateLimit bool, known bool) {
-	switch kind {
-	case "RateLimitExceeded", "rate_limit_exceeded":
-		return true, true
-	case "UsageLimitExceeded", "usage_limit_exceeded",
-		"ServerOverloaded", "server_overloaded":
-		return false, true
+// codexErrorKinds lists every CodexErrorInfo variant
+// (codex-rs/protocol/src/protocol.rs). Only rate_limit_exceeded is a rate
+// limit.
+var codexErrorKinds = map[string]bool{
+	"context_window_exceeded":           false,
+	"session_budget_exceeded":           false,
+	"usage_limit_exceeded":              false,
+	"rate_limit_exceeded":               true,
+	"flex_unavailable":                  false,
+	"server_overloaded":                 false,
+	"model_not_found":                   false,
+	"policy_capacity_unavailable":       false,
+	"cyber_policy":                      false,
+	"bio_policy":                        false,
+	"misalignment_policy_violation":     false,
+	"too_many_denials":                  false,
+	"http_connection_failed":            false,
+	"response_stream_connection_failed": false,
+	"internal_server_error":             false,
+	"unauthorized":                      false,
+	"bad_request":                       false,
+	"invalid_prompt":                    false,
+	"sandbox_error":                     false,
+	"response_stream_disconnected":      false,
+	"response_too_many_failed_attempts": false,
+	"active_turn_not_steerable":         false,
+	"thread_rollback_failed":            false,
+	"other":                             false,
+}
+
+// codexErrorKindIsRateLimit reports whether an error kind, in snake_case or
+// PascalCase, is a rate limit; nil for a kind Codex does not define.
+func codexErrorKindIsRateLimit(kind string) *bool {
+	isRL, known := codexErrorKinds[codexSnakeCase(kind)]
+	if !known {
+		return nil
 	}
-	return false, false
+	return boolPtr(isRL)
+}
+
+func codexSnakeCase(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			r = unicode.ToLower(r)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

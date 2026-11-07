@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -2124,4 +2125,160 @@ func TestCodexOrdinalsWithoutForkAreKept(t *testing.T) {
 	if evs, err := ParseCodexLine([]byte(codexForkRollout[3])); err != nil || len(evs) != 1 {
 		t.Errorf("stateless inherited record = %+v, %v; want one event", evs, err)
 	}
+}
+
+func TestCodexTurnBoundaries(t *testing.T) {
+	line := func(ts, kind, payload string) string {
+		return fmt.Sprintf(`{"timestamp":"2026-11-07T10:00:%s.000Z","type":%q,"payload":%s}`, ts, kind, payload)
+	}
+	userMsg := func(ts, text string) string {
+		return line(ts, "response_item", fmt.Sprintf(`{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}`, text))
+	}
+	tests := []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{
+			name: "prompted turn with mid-turn input",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t1","started_at":1794045600}`),
+				line("01", "turn_context", `{"cwd":"/work","model":"gpt-test"}`),
+				userMsg("02", "Fix the build"),
+				line("03", "response_item", `{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"make\"}","call_id":"c1"}`),
+				userMsg("04", "Also run the tests"),
+				line("05", "event_msg", `{"type":"task_complete","turn_id":"t1","completed_at":1794045610,"last_agent_message":"Done."}`),
+			},
+			want: []string{"model_change", "turn_start@1794045600000:Fix the build", "tool_call", "message_absorbed:Also run the tests", "turn_end:Done."},
+		},
+		{
+			name: "turn without a prompt",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t2","started_at":1794045600}`),
+				line("01", "response_item", `{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c2"}`),
+				line("02", "event_msg", `{"type":"task_complete","turn_id":"t2","completed_at":1794045602}`),
+			},
+			want: []string{"turn_start@1794045600000", "tool_call", "turn_end"},
+		},
+		{
+			name: "turn with no activity",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t3","started_at":1794045600}`),
+				line("01", "event_msg", `{"type":"task_complete","turn_id":"t3","completed_at":1794045601}`),
+			},
+			want: []string{"turn_start@1794045600000", "turn_end"},
+		},
+		{
+			name: "interrupted turn",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t4","started_at":1794045600}`),
+				userMsg("01", "Long job"),
+				line("02", "event_msg", `{"type":"turn_aborted","turn_id":"t4","reason":"interrupted","started_at":1794045600,"completed_at":1794045605,"duration_ms":5000}`),
+			},
+			want: []string{"turn_start@1794045600000:Long job", "turn_end@1794045605000[interrupted]"},
+		},
+		{
+			name: "failed turn",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t5","started_at":1794045600}`),
+				userMsg("01", "Go"),
+				line("02", "event_msg", `{"type":"task_complete","turn_id":"t5","last_agent_message":null,"completed_at":1794045603,"error":{"message":"Selected model is at capacity.","codex_error_info":"server_overloaded"}}`),
+			},
+			want: []string{"turn_start@1794045600000:Go", "error:Selected model is at capacity.", "turn_end"},
+		},
+		{
+			name: "next turn starts before the previous one ends",
+			lines: []string{
+				line("00", "event_msg", `{"type":"task_started","turn_id":"t6","started_at":1794045600}`),
+				line("01", "event_msg", `{"type":"task_started","turn_id":"t7","started_at":1794045601}`),
+				userMsg("02", "Second"),
+			},
+			want: []string{"turn_start@1794045600000", "turn_start@1794045601000:Second"},
+		},
+		{
+			name: "rollout without task events",
+			lines: []string{
+				userMsg("00", "First"),
+				userMsg("01", "Second"),
+			},
+			want: []string{"turn_start:First", "turn_start:Second"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewCodexParser()
+			var got []string
+			for _, l := range tt.lines {
+				evs, err := p.ParseLine([]byte(l))
+				if err != nil {
+					t.Fatalf("ParseLine(%s): %v", l, err)
+				}
+				for _, ev := range evs {
+					got = append(got, describeTurnEvent(ev, tt.want))
+				}
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Errorf("events = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// describeTurnEvent renders an event compactly, including the timestamp only
+// where the expectations name one.
+func describeTurnEvent(ev ParsedEvent, want []string) string {
+	desc := ev.EventType
+	for _, w := range want {
+		if strings.HasPrefix(w, ev.EventType+"@") {
+			desc += fmt.Sprintf("@%d", ev.Timestamp)
+			break
+		}
+	}
+	if ev.Data.StopReason != nil {
+		desc += "[" + *ev.Data.StopReason + "]"
+	}
+	if ev.Data.Content != nil && ev.EventType != "model_change" {
+		desc += ":" + *ev.Data.Content
+	}
+	return desc
+}
+
+func TestCodexTurnErrorClassification(t *testing.T) {
+	tests := []struct {
+		name, info string
+		wantRL     *bool
+		wantStatus *int
+	}{
+		{"usage limit", `"usage_limit_exceeded"`, boolPtr(false), nil},
+		{"rate limit", `"rate_limit_exceeded"`, boolPtr(true), nil},
+		{"pascal case rate limit", `"RateLimitExceeded"`, boolPtr(true), nil},
+		{"policy", `"cyber_policy"`, boolPtr(false), nil},
+		{"unknown kind", `"something_new"`, nil, nil},
+		{"status 429", `{"response_too_many_failed_attempts":{"http_status_code":429}}`, boolPtr(true), intPtr(429)},
+		{"status 500", `{"response_stream_disconnected":{"http_status_code":500}}`, boolPtr(false), intPtr(500)},
+		{"no status", `{"http_connection_failed":{"http_status_code":null}}`, boolPtr(false), nil},
+		{"several kinds", `{"rate_limit_exceeded":null,"usage_limit_exceeded":null}`, boolPtr(true), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var info interface{}
+			if err := json.Unmarshal([]byte(tt.info), &info); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 20; i++ {
+				rl, status := classifyCodexErrorInfo(info)
+				if describeBool(rl) != describeBool(tt.wantRL) || fmt.Sprint(derefInt(status)) != fmt.Sprint(derefInt(tt.wantStatus)) {
+					t.Fatalf("classify = %s, %v; want %s, %v", describeBool(rl), derefInt(status), describeBool(tt.wantRL), derefInt(tt.wantStatus))
+				}
+			}
+		})
+	}
+}
+
+
+func derefInt(n *int) interface{} {
+	if n == nil {
+		return nil
+	}
+	return *n
 }

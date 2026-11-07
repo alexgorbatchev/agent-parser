@@ -119,6 +119,12 @@ func TestCodexPaginatedPromptsComeFromUserMessageItems(t *testing.T) {
 			want: "turn_start:Remote prompt images=1",
 		},
 		{
+			name: "UserMessage image uploaded as a file",
+			lines: []string{meta(`,"history_mode":"paginated"`), start,
+				completed(`{"type":"text","text":"Uploaded","text_elements":[]},{"type":"image","file_id":"file-1"}`)},
+			want: "turn_start:Uploaded images=1",
+		},
+		{
 			name: "legacy history uses the response item",
 			lines: []string{meta(""), start,
 				userItem("Legacy prompt", ""),

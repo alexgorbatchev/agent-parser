@@ -363,6 +363,12 @@ export interface ICodexSessionMetaPayload {
    * the subagent's turns or items.
    */
   readonly subagent_history_start_ordinal?: number;
+  /**
+   * `ThreadHistoryMode`; absent means "legacy". Paginated rollouts persist
+   * completed turn items (`item_completed`) instead of the legacy event
+   * projections such as `user_message` and `agent_message`.
+   */
+  readonly history_mode?: "legacy" | "paginated";
 }
 
 export interface ICodexSessionMetaRecord {
@@ -579,17 +585,42 @@ export interface ICodexParsedCommand {
 }
 
 /**
- * User message completion observed in Codex 0.166.0. A `$name` skill mention adds a
- * `skill` content item, which parsers report as a user skill invocation. Codex also injects
- * the skill as a user `response_item` message starting with `<skill>`, but forked child
- * rollouts replay that message while omitting `item_completed` records, so only the
- * content item is counted.
+ * Completed user message (`TurnItem::UserMessage`), persisted only in paginated history.
+ * Codex builds it only for real user input, never for the context it injects as
+ * user-role messages, and writes it right after the user `response_item`, so parsers
+ * take the prompt text from it. Its `local_image` items carry only a path, so image data
+ * comes from that adjacent `response_item`.
+ *
+ * A `$name` skill mention adds a `skill` content item, which parsers report as a user
+ * skill invocation. Codex also injects the skill as a user `response_item` message
+ * starting with `<skill>`, but forked child rollouts replay that message while omitting
+ * `item_completed` records, so only the content item is counted.
  */
 export interface ICodexCompletedUserMessage {
   readonly type: "UserMessage";
   readonly id?: string;
   readonly client_id?: string;
-  readonly content: readonly (ICodexUserMessageTextItem | ICodexUserMessageSkillItem)[];
+  readonly content: readonly ICodexUserInput[];
+}
+
+/** Codex's `UserInput` (`codex-rs/protocol/src/user_input.rs`). */
+export type ICodexUserInput =
+  | ICodexUserMessageTextItem
+  | ICodexUserMessageImageItem
+  | ICodexUserMessageLocalImageItem
+  | ICodexUserMessageSkillItem
+  | { readonly type: "audio" | "local_audio" | "mention"; readonly [key: string]: unknown };
+
+/** An image as an inline `image_url` or an uploaded `file_id` (`ImageReference`). */
+export type ICodexUserMessageImageItem = {
+  readonly type: "image";
+  readonly detail?: string;
+} & ({ readonly image_url: string } | { readonly file_id: string });
+
+export interface ICodexUserMessageLocalImageItem {
+  readonly type: "local_image";
+  readonly path: string;
+  readonly detail?: string;
 }
 
 export interface ICodexUserMessageTextItem {

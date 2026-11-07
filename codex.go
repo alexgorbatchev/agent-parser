@@ -475,6 +475,7 @@ type rawCodexUserMessage struct {
 		Type     string `json:"type"`
 		Text     string `json:"text"`
 		ImageURL string `json:"image_url"`
+		FileID   string `json:"file_id"`
 		Name     string `json:"name"`
 		Path     string `json:"path"`
 	} `json:"content"`
@@ -501,8 +502,11 @@ func parseCodexUserMessage(raw json.RawMessage, ts int64, p *CodexParser) ([]Par
 		case "text":
 			text.WriteString(content.Text)
 		case "image":
+			// ImageReference is either an inline image_url or an uploaded file_id.
 			if content.ImageURL != "" {
 				images = append(images, imageFromURL(content.ImageURL))
+			} else if content.FileID != "" {
+				images = append(images, Image{FileID: content.FileID})
 			}
 		}
 	}

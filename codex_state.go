@@ -91,3 +91,17 @@ func (p *CodexParser) clearRateLimitLocked() {
 	p.rateLimitResetAt = nil
 	p.retryAfterSeconds = nil
 }
+
+// isRepeatedUsage records a token_count's cumulative usage and reports whether
+// it equals the previous record's, which means the record reports no new model
+// response. The stateless path cannot tell and reports false.
+func (p *CodexParser) isRepeatedUsage(total rawCodexTokenBreakdown) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	repeated := p.lastTotalUsage != nil && *p.lastTotalUsage == total
+	p.lastTotalUsage = &total
+	return repeated
+}

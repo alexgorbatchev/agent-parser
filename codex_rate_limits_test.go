@@ -101,7 +101,7 @@ func TestCodexNativeRateLimitRecovery(t *testing.T) {
 }
 
 func TestCodexNativeRateLimitFractionalRetry(t *testing.T) {
-	line := `{"timestamp":"2026-10-22T22:55:32.576Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":100,"resets_at":1792709733}}}}`
+	line := `{"timestamp":"2026-10-22T22:55:32.576Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":270,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":290},"last_token_usage":{"input_tokens":270,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":290}},"rate_limits":{"primary":{"used_percent":100,"resets_at":1792709733}}}}`
 	events, err := ParseCodexLine([]byte(line))
 	if err != nil || len(events) != 1 {
 		t.Fatalf("ParseLine = %v, %v", events, err)
@@ -168,7 +168,7 @@ func TestCodexNativeRateLimitMarkedWindows(t *testing.T) {
 			for _, source := range []string{"usage snapshot", "quota-only cache", "error snapshot"} {
 				t.Run(source, func(t *testing.T) {
 					p := NewCodexParser()
-					payload := `"type":"token_count","info":{},"rate_limits":` + limits
+					payload := `"type":"token_count","info":{"total_token_usage":{"input_tokens":280,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":300},"last_token_usage":{"input_tokens":280,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":300}},"rate_limits":` + limits
 					switch source {
 					case "error snapshot":
 						payload = `"type":"error","codex_error_info":"RateLimitExceeded","message":"limit reached","rate_limits":` + limits

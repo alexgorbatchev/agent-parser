@@ -15,7 +15,7 @@
 
 # How It Works
 
-Consumers feed raw log lines or database handles into the appropriate parser instance. As records are processed, `agent-parser` returns a slice of `ParsedEvent` structs containing standardized event types (`run_started`, `turn_start`, `agent_message`, `question_prompt`, `thinking`, `tool_call`, `tool_result`, `skill_invoked`, `model_change`, `title_change`, `summary`, `message_absorbed`, `turn_end`, `error`). Every harness parser uses this same vocabulary.
+Consumers feed raw log lines or database handles into the appropriate parser instance. As records are processed, `agent-parser` returns a slice of `ParsedEvent` structs containing standardized event types (`run_started`, `turn_start`, `agent_message`, `question_prompt`, `thinking`, `tool_call`, `tool_result`, `skill_invoked`, `model_change`, `title_change`, `summary`, `message_absorbed`, `usage`, `turn_end`, `error`). Every harness parser uses this same vocabulary. `usage` reports token usage, context window, and rate-limit metadata for one model response without ending the turn; harnesses that report usage on the response that ends a turn attach it to `turn_end` instead.
 
 When tool calls perform file edits or patches, `agent-parser` parses the parameters into unified diffs (`DiffHunk` and `DiffLine`), providing downstream consumers with consistent change sets regardless of the originating tool or harness format.
 

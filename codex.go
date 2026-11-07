@@ -321,6 +321,9 @@ type CodexParser struct {
 	contextWindow     int64
 	rateLimitResetAt  *int64
 	retryAfterSeconds *int64
+	// lastTotalUsage is the cumulative usage of the previous token_count
+	// record, used to recognize records Codex re-sends without new usage.
+	lastTotalUsage *rawCodexTokenBreakdown
 }
 
 // NewCodexParser creates a new stateful parser stream for Codex transcripts.
@@ -336,6 +339,7 @@ func (p *CodexParser) Reset() {
 	p.contextWindow = 0
 	p.rateLimitResetAt = nil
 	p.retryAfterSeconds = nil
+	p.lastTotalUsage = nil
 }
 
 // ParseLine parses a single line using this CodexParser instance.

@@ -123,29 +123,38 @@ func codexThinkingEvents(summary []rawCodexSummaryPart, ts int64) []ParsedEvent 
 	}}
 }
 
+// codexTokenCountEvents turns a token_count record into a usage event.
+//
+// Codex sends token_count after each model response, again unchanged when rate
+// limits refresh, and with an estimated total in place of the last response's
+// usage when it fills usage up to the context window
+// (TokenUsageInfo::fill_to_context_window) or re-estimates the context
+// (Session::recompute_token_usage). None of these mark the end of a turn:
+// task_complete does.
 func codexTokenCountEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser) []ParsedEvent {
 	resetAtPtr, retrySecPtr := selectCodexRateLimitReset(evt.RateLimits, ts)
 	p.recordTokenCountRateLimits(resetAtPtr, retrySecPtr, evt.RateLimits, ts)
 
-	// Quota-only updates do not establish that a turn has completed.
+	// Quota-only updates report no token usage.
 	if evt.Info == nil {
 		return nil
 	}
 	info := *evt.Info
-
-	chosen := info.LastTokenUsage
-	if chosen.TotalTokens == 0 && chosen.InputTokens == 0 && chosen.OutputTokens == 0 {
-		chosen = info.TotalTokenUsage
+	last := info.LastTokenUsage
+	if p.isRepeatedUsage(info.TotalTokenUsage) || last.InputTokens == 0 && last.OutputTokens == 0 {
+		// A re-send, or an estimate that reports only a total: no model
+		// response consumed these tokens.
+		return nil
 	}
 
-	tot := chosen.TotalTokens
+	tot := last.TotalTokens
 	if tot == 0 {
-		tot = chosen.InputTokens + chosen.OutputTokens
+		tot = last.InputTokens + last.OutputTokens
 	}
 
 	// Input counts only fresh tokens, as for the other harnesses: Codex's
 	// cached and cache-write counts are parts of input_tokens.
-	freshInput := chosen.InputTokens - chosen.CachedInputTokens - chosen.CacheWriteInputTokens
+	freshInput := last.InputTokens - last.CachedInputTokens - last.CacheWriteInputTokens
 	if freshInput < 0 {
 		freshInput = 0
 	}
@@ -161,7 +170,7 @@ func codexTokenCountEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser
 	}
 
 	return []ParsedEvent{{
-		EventType: "turn_end",
+		EventType: "usage",
 		Timestamp: ts,
 		Data: EventData{
 			Role:               stringPtr("assistant"),
@@ -169,10 +178,10 @@ func codexTokenCountEvents(evt rawCodexEventMsgPayload, ts int64, p *CodexParser
 			ModelContextWindow: cwPtr,
 			Usage: &TokenUsage{
 				Input:      freshInput,
-				Output:     chosen.OutputTokens,
-				CacheRead:  chosen.CachedInputTokens,
-				CacheWrite: chosen.CacheWriteInputTokens,
-				Reasoning:  chosen.ReasoningOutputTokens,
+				Output:     last.OutputTokens,
+				CacheRead:  last.CachedInputTokens,
+				CacheWrite: last.CacheWriteInputTokens,
+				Reasoning:  last.ReasoningOutputTokens,
 				Total:      tot,
 			},
 			RateLimitResetAt:  resetAtPtr,

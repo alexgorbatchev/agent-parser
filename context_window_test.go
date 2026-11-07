@@ -215,8 +215,8 @@ func TestContextWindowResolutionAndFullness_Codex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCodexLine failed: %v", err)
 	}
-	if len(evs) != 1 || evs[0].EventType != "turn_end" {
-		t.Fatalf("expected 1 turn_end event, got: %+v", evs)
+	if len(evs) != 1 || evs[0].EventType != "usage" {
+		t.Fatalf("expected 1 usage event, got: %+v", evs)
 	}
 
 	u := evs[0].Data.Usage

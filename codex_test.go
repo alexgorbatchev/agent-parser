@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -408,8 +409,8 @@ func TestParseCodexLine(t *testing.T) {
 		if len(evs) != 1 {
 			t.Fatalf("expected 1 event, got %d", len(evs))
 		}
-		if evs[0].EventType != "turn_end" {
-			t.Errorf("EventType = %q, want 'turn_end'", evs[0].EventType)
+		if evs[0].EventType != "usage" {
+			t.Errorf("EventType = %q, want 'usage'", evs[0].EventType)
 		}
 		u := evs[0].Data.Usage
 		if u == nil {
@@ -443,13 +444,11 @@ func TestParseCodexLine(t *testing.T) {
 
 	t.Run("event_msg token_count ignores token names Codex never writes", func(t *testing.T) {
 		line := `{"timestamp":"2026-06-12T16:08:42.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":10},"last_token_usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}}}`
+		// With the invented names ignored, the record reports no input or
+		// output tokens, so it carries no response usage.
 		evs, err := ParseCodexLine([]byte(line))
-		if err != nil || len(evs) != 1 {
-			t.Fatalf("evs=%v err=%v", evs, err)
-		}
-		want := TokenUsage{Total: 10}
-		if u := evs[0].Data.Usage; u == nil || *u != want {
-			t.Errorf("Usage = %+v, want %+v", u, want)
+		if err != nil || len(evs) != 0 {
+			t.Errorf("evs=%+v err=%v; want no events", evs, err)
 		}
 	})
 
@@ -800,9 +799,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:43.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_token_usage": { "total_tokens": 100 }
-				},
+				"info": {"total_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":170},"last_token_usage":{"input_tokens":150,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":170}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 25,
@@ -834,9 +831,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:43.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_token_usage": { "total_tokens": 100 }
-				},
+				"info": {"total_token_usage":{"input_tokens":160,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":180},"last_token_usage":{"input_tokens":160,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":180}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 25,
@@ -865,9 +860,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:43.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_token_usage": { "total_tokens": 100 }
-				},
+				"info": {"total_token_usage":{"input_tokens":170,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":190},"last_token_usage":{"input_tokens":170,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":190}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 100,
@@ -896,9 +889,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:43.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_token_usage": { "total_tokens": 100 }
-				},
+				"info": {"total_token_usage":{"input_tokens":180,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":200},"last_token_usage":{"input_tokens":180,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":200}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 25,
@@ -927,9 +918,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:43.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_token_usage": { "total_tokens": 100 }
-				},
+				"info": {"total_token_usage":{"input_tokens":190,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":210},"last_token_usage":{"input_tokens":190,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":210}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 100,
@@ -1124,9 +1113,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:00.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 100
-				},
+				"info": {"total_token_usage":{"input_tokens":210,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":230},"last_token_usage":{"input_tokens":210,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":230}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 100,
@@ -1293,9 +1280,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:00.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 100
-				},
+				"info": {"total_token_usage":{"input_tokens":220,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":240},"last_token_usage":{"input_tokens":220,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":240}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 100,
@@ -1318,9 +1303,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:10.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 150
-				},
+				"info": {"total_token_usage":{"input_tokens":230,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":250},"last_token_usage":{"input_tokens":230,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":250}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 25
@@ -1375,9 +1358,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:00.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 100
-				},
+				"info": {"total_token_usage":{"input_tokens":240,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":260},"last_token_usage":{"input_tokens":240,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":260}},
 				"rate_limits": {
 					"secondary": {
 						"used_percent": 100,
@@ -1401,9 +1382,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:10.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 150
-				},
+				"info": {"total_token_usage":{"input_tokens":250,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":270},"last_token_usage":{"input_tokens":250,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":270}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 25
@@ -1448,9 +1427,7 @@ func TestParseCodexLine(t *testing.T) {
 			"timestamp": "2026-06-12T16:08:00.000Z",
 			"payload": {
 				"type": "token_count",
-				"info": {
-					"total_tokens": 100
-				},
+				"info": {"total_token_usage":{"input_tokens":260,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":280},"last_token_usage":{"input_tokens":260,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":280}},
 				"rate_limits": {
 					"primary": {
 						"used_percent": 100,
@@ -1956,4 +1933,110 @@ func TestCodexParser_NormalizedFileModification(t *testing.T) {
 			t.Errorf("Content = %v, want 'hello world'", fm.Content)
 		}
 	})
+}
+
+// codexTokenCountLine builds a token_count record in the shape Codex's
+// TokenUsageInfo serializes.
+func codexTokenCountLine(ts string, total, last string, window int64) string {
+	return fmt.Sprintf(`{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":%s,"last_token_usage":%s,"model_context_window":%d},"rate_limits":null}}`, ts, total, last, window)
+}
+
+func TestCodexTokenCountIsUsageNotTurnCompletion(t *testing.T) {
+	first := `{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":0,"total_tokens":1050}`
+	second := `{"input_tokens":2300,"cached_input_tokens":900,"output_tokens":90,"reasoning_output_tokens":10,"total_tokens":2390}`
+	secondLast := `{"input_tokens":1300,"cached_input_tokens":900,"output_tokens":40,"reasoning_output_tokens":10,"total_tokens":1340}`
+	lines := []string{
+		`{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":1794045600}}`,
+		codexTokenCountLine("2026-11-07T10:00:05Z", first, first, 258400),
+		`{"timestamp":"2026-11-07T10:00:06Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_1"}}`,
+		`{"timestamp":"2026-11-07T10:00:07Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Process exited with code 0\nOutput:\n"}}`,
+		// Follow-up sampling after the tool result.
+		codexTokenCountLine("2026-11-07T10:00:09Z", second, secondLast, 258400),
+		// Rate-limit refresh re-sends the same usage.
+		codexTokenCountLine("2026-11-07T10:00:10Z", second, secondLast, 258400),
+		`{"timestamp":"2026-11-07T10:00:11Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":1794045611,"last_agent_message":"Done."}}`,
+	}
+
+	p := NewCodexParser()
+	var usage []TokenUsage
+	var lifecycle []string
+	for _, line := range lines {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatalf("ParseLine(%s): %v", line, err)
+		}
+		for _, ev := range evs {
+			switch ev.EventType {
+			case "usage":
+				usage = append(usage, *ev.Data.Usage)
+			case "turn_start", "turn_end":
+				lifecycle = append(lifecycle, ev.EventType)
+			}
+		}
+	}
+
+	if want := []string{"turn_start", "turn_end"}; fmt.Sprint(lifecycle) != fmt.Sprint(want) {
+		t.Errorf("lifecycle = %v, want %v: token counts must not end the turn", lifecycle, want)
+	}
+	want := []TokenUsage{
+		{Input: 1000, Output: 50, Total: 1050},
+		{Input: 400, Output: 40, CacheRead: 900, Reasoning: 10, Total: 1340},
+	}
+	if fmt.Sprint(usage) != fmt.Sprint(want) {
+		t.Errorf("usage = %+v, want %+v: each response counted once, re-sends skipped", usage, want)
+	}
+}
+
+func TestCodexTokenCountSkipsEstimates(t *testing.T) {
+	tests := map[string]string{
+		// TokenUsageInfo::fill_to_context_window replaces cumulative usage with
+		// the window size and last usage with the gap.
+		"context fill": codexTokenCountLine("2026-11-07T10:00:00Z",
+			`{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":258400}`,
+			`{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":3400}`,
+			258400),
+		// Session::recompute_token_usage keeps cumulative usage and replaces last
+		// usage with an estimated context size.
+		"recomputed estimate": codexTokenCountLine("2026-11-07T10:00:00Z",
+			`{"input_tokens":29000,"cached_input_tokens":24000,"output_tokens":700,"reasoning_output_tokens":200,"total_tokens":29700}`,
+			`{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":11213}`,
+			258400),
+	}
+	for name, line := range tests {
+		t.Run(name, func(t *testing.T) {
+			for _, parse := range []func([]byte) ([]ParsedEvent, error){ParseCodexLine, NewCodexParser().ParseLine} {
+				evs, err := parse([]byte(line))
+				if err != nil || len(evs) != 0 {
+					t.Errorf("estimate = %+v, %v; want no events", evs, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexTokenCountWithoutNewUsage(t *testing.T) {
+	zero := `{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0}`
+	evs, err := ParseCodexLine([]byte(codexTokenCountLine("2026-11-07T10:00:00Z", zero, zero, 258400)))
+	if err != nil || len(evs) != 0 {
+		t.Errorf("empty usage = %+v, %v; want no events", evs, err)
+	}
+
+	// The stateless parser cannot recognize a re-send and reports it again.
+	u := `{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":15}`
+	line := codexTokenCountLine("2026-11-07T10:00:00Z", u, u, 258400)
+	for i := 0; i < 2; i++ {
+		if evs, _ := ParseCodexLine([]byte(line)); len(evs) != 1 {
+			t.Errorf("stateless parse %d = %+v; want one usage event", i, evs)
+		}
+	}
+
+	// Reset forgets the previous cumulative usage.
+	p := NewCodexParser()
+	if evs, _ := p.ParseLine([]byte(line)); len(evs) != 1 {
+		t.Fatalf("first parse = %+v", evs)
+	}
+	p.Reset()
+	if evs, _ := p.ParseLine([]byte(line)); len(evs) != 1 {
+		t.Errorf("parse after Reset = %+v; want one usage event", evs)
+	}
 }

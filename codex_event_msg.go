@@ -25,7 +25,9 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 		// persisted_event_msg), so the response_item alone reports the prompt.
 		return nil, nil
 	case "agent_message":
-		return codexAgentMessageEvents(evt.Message, ts), nil
+		// Legacy-history rollouts persist this event as a copy of the
+		// assistant message already recorded as a response_item.
+		return nil, nil
 	case "reasoning":
 		return codexThinkingEvents(evt.Summary, ts), nil
 	case "token_count":

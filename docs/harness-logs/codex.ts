@@ -635,6 +635,13 @@ export interface ICodexUserMessageSkillItem {
   readonly path: string;
 }
 
+/**
+ * Completed assistant message (`TurnItem::AgentMessage`), persisted only in paginated
+ * history. Each one has an assistant `response_item` with the same id or text, written
+ * after it; parsers report the message once, from this item. An item with `questions`
+ * projects a `request_user_input_async` call: its `id` is that call's `call_id` and its
+ * text is the question, which the function_call already reports.
+ */
 export interface ICodexCompletedAgentMessage {
   readonly type: "AgentMessage";
   readonly id?: string;

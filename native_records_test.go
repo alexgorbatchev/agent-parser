@@ -44,24 +44,74 @@ func TestClaudeAwaySummary(t *testing.T) {
 	}
 }
 
+func TestCodexAgentMessageSources(t *testing.T) {
+	item := `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"msg_1","content":[{"type":"Text","text":"Working on it."}],"phase":"commentary"}}}`
+	response := `{"type":"response_item","payload":{"type":"message","role":"assistant","id":"msg_1","content":[{"type":"output_text","text":"Working on it."}],"phase":"commentary"}}`
+	legacyEvent := `{"type":"event_msg","payload":{"type":"agent_message","message":"Working on it.","phase":"commentary"}}`
+	tests := []struct {
+		name, meta string
+		lines      []string
+	}{
+		{"paginated history", `{"type":"session_meta","payload":{"id":"t","history_mode":"paginated"}}`, []string{item, response}},
+		{"legacy history", `{"type":"session_meta","payload":{"id":"t"}}`, []string{response, legacyEvent}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewCodexParser()
+			if _, err := p.ParseLine([]byte(tt.meta)); err != nil {
+				t.Fatal(err)
+			}
+			var messages []string
+			for _, line := range tt.lines {
+				events, err := p.ParseLine([]byte(line))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, ev := range events {
+					if ev.EventType == "agent_message" {
+						messages = append(messages, *ev.Data.Content)
+					}
+				}
+			}
+			if len(messages) != 1 || messages[0] != "Working on it." {
+				t.Errorf("agent messages = %q; want the message once", messages)
+			}
+		})
+	}
+
+	// The stateless parser reads assistant messages from response items only.
+	for line, want := range map[string]int{item: 0, response: 1, legacyEvent: 0} {
+		if events, err := ParseCodexLine([]byte(line)); err != nil || len(events) != want {
+			t.Errorf("stateless %s = %+v, %v; want %d events", line, events, err, want)
+		}
+	}
+}
+
 func TestCodexNativeAgentMessage(t *testing.T) {
 	for _, tt := range []struct{ name, line, eventType, text string }{
 		{"async tool", `{"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"question-1","arguments":"{\"questions\":[{\"title\":\"Where does your dashboard run?\"},{\"title\":\"Which machine?\"}]}"}}`, "question_prompt", "Where does your dashboard run?\nWhich machine?"},
 		{"sync tool", `{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"question\":\"Which host?\"}]}"}}`, "question_prompt", "Which host?"},
-		{"async message", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"question-1","content":[{"type":"Text","text":"Where does your dashboard run?"}],"phase":"final_answer","delivery":"async","questions":[{"title":"Where does your dashboard run?"}]}}}`, "question_prompt", "Where does your dashboard run?"},
+		{"async message", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"question-1","content":[{"type":"Text","text":"Where does your dashboard run?"}],"phase":"final_answer","delivery":"async","questions":[{"title":"Where does your dashboard run?"}]}}}`, "", ""},
 		{"ordinary message", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"Migration finished."}],"phase":"final_answer"}}}`, "agent_message", "Migration finished."},
 		{"empty message", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[]}}}`, "", ""},
 		{"other item", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ToolCall","content":[{"type":"Text","text":"not a message"}]}}}`, "", ""},
 		{"unknown item fields", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ToolCall","content":17,"questions":"other schema"}}}`, "", ""},
 		{"missing item", `{"type":"event_msg","payload":{"type":"item_completed"}}`, "", ""},
-		{"question without content", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","questions":[{"title":"Where?"}]}}}`, "question_prompt", "Where?"},
-		{"blank questions", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"Done"}],"questions":[{"title":" "}]}}}`, "agent_message", "Done"},
+		{"question without content", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","questions":[{"title":"Where?"}]}}}`, "", ""},
+		{"blank questions", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"Done"}],"questions":[{"title":" "}]}}}`, "", ""},
 		{"nontext content", `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Image","text":"not conversational text"}]}}}`, "", ""},
 		{"prompt input", `{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"prompt\":\"Which host?\"}"}}`, "question_prompt", "Which host?"},
 		{"mixed questions", `{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[17,{\"title\":\" \"},{\"title\":\"Where?\"}]}"}}`, "question_prompt", "Where?"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			events, err := ParseCodexLine([]byte(tt.line))
+			// Completed items are the assistant message source in paginated
+			// history; an item with questions projects the question tool call,
+			// which reports the question itself.
+			p := NewCodexParser()
+			if _, err := p.ParseLine([]byte(`{"type":"session_meta","payload":{"id":"t","history_mode":"paginated"}}`)); err != nil {
+				t.Fatal(err)
+			}
+			events, err := p.ParseLine([]byte(tt.line))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,9 +135,6 @@ func TestCodexNativeAgentMessage(t *testing.T) {
 				if events[0].Data.ToolCallID == nil || *events[0].Data.ToolCallID != "question-1" || events[0].Data.ToolInput == nil {
 					t.Fatalf("lost question tool metadata: %+v", events[0].Data)
 				}
-			}
-			if tt.name == "async message" && (events[0].Data.ToolCallID == nil || *events[0].Data.ToolCallID != "question-1") {
-				t.Fatalf("lost async question correlation: %+v", events[0].Data)
 			}
 		})
 	}

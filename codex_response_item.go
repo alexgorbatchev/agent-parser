@@ -140,6 +140,11 @@ func codexMessageEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexPars
 		}
 		return p.promptEvents(codexUserPromptEvents(contentStr, codexImages(resp.Content), ts))
 	case "assistant":
+		// Paginated history reports the message from its completed
+		// AgentMessage item instead.
+		if p.isPaginated() {
+			return nil
+		}
 		return codexAgentMessageEvents(contentStr, ts)
 	}
 	return nil

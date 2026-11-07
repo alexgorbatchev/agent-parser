@@ -12,7 +12,7 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 - Format Go source: `just fmt`
 
 ## Key gotchas
-- **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex completed `AgentMessage` items emit conversational `agent_message` or `question_prompt` when structured questions are present; preserve question tool arguments and call IDs.
+- **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex question tool calls (`request_user_input` and friends) emit `question_prompt` with their tool arguments and call IDs. In paginated history, completed `AgentMessage` items are the `agent_message` source; an item with `questions` projects a question tool call and emits nothing.
 
 - **Images**: Prompt and tool-result images go in `EventData.Images`; text fields keep only text. Codex tool outputs are the exception: `ToolOutput` keeps the raw content array, image data included, so media and unknown blocks are not lost.
 - **Claude Code delivery evidence**: A sent UUID lands in `user.uuid` for a normal turn, `mergedSendUuids` for queued messages merged into a turn, and a `queue-operation` `remove` with `reason: absorbed_mid_turn` for messages absorbed mid-turn, which have no `user` record. `enqueue` and `dequeue` records carry no UUID, so a transcript proves consumption but never queueing; a missing record means unknown.

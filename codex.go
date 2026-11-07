@@ -259,9 +259,21 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]P
 	if header.Type != "AgentMessage" {
 		return nil, nil
 	}
+	return parseCodexAgentMessage(raw, ts, p)
+}
+
+// parseCodexAgentMessage reports a completed AgentMessage item. Paginated
+// history writes one for every assistant message, alongside the assistant
+// response_item with the same text, and is the source there. An item with
+// questions is Codex's projection of a question tool call, whose
+// function_call already reports the question with its arguments and call ID.
+func parseCodexAgentMessage(raw json.RawMessage, ts int64, p *CodexParser) ([]ParsedEvent, error) {
 	var item rawCodexAgentMessage
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, fmt.Errorf("unmarshaling completed agent message: %w", err)
+	}
+	if len(item.Questions) > 0 || !p.isPaginated() {
+		return nil, nil
 	}
 	var content strings.Builder
 	for _, block := range item.Content {
@@ -269,25 +281,7 @@ func parseCodexCompletedItem(raw json.RawMessage, ts int64, p *CodexParser) ([]P
 			content.WriteString(block.Text)
 		}
 	}
-	data := EventData{Role: stringPtr("assistant"), Content: stringPtr(content.String())}
-	eventType := "agent_message"
-	var questions []string
-	for _, question := range item.Questions {
-		if text := codexQuestionText(question); text != "" {
-			questions = append(questions, text)
-		}
-	}
-	if len(questions) > 0 {
-		eventType = "question_prompt"
-		data.Question = stringPtr(strings.Join(questions, "\n"))
-		if item.ID != "" {
-			data.ToolCallID = stringPtr(item.ID)
-		}
-	}
-	if strings.TrimSpace(content.String()) == "" && data.Question == nil {
-		return nil, nil
-	}
-	return []ParsedEvent{{EventType: eventType, Timestamp: ts, Data: data}}, nil
+	return codexAgentMessageEvents(content.String(), ts), nil
 }
 
 func codexQuestionText(input map[string]interface{}) string {

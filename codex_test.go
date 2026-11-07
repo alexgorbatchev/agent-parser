@@ -353,12 +353,10 @@ func TestParseCodexLine(t *testing.T) {
 				"message": "All unit tests pass."
 			}
 		}`
+		// Legacy history copies the assistant response_item into this event.
 		evs1, err := ParseCodexLine([]byte(agentMsgLine))
-		if err != nil || len(evs1) != 1 {
-			t.Fatalf("failed agent_message parsing: evs=%v err=%v", evs1, err)
-		}
-		if evs1[0].EventType != "agent_message" || *evs1[0].Data.Content != "All unit tests pass." {
-			t.Errorf("unexpected agent_message event: %+v", evs1[0])
+		if err != nil || len(evs1) != 0 {
+			t.Fatalf("agent_message event = %v, %v; want no events", evs1, err)
 		}
 
 		reasoningLine := `{

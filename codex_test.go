@@ -2105,7 +2105,7 @@ func TestCodexTurnBoundaries(t *testing.T) {
 				userMsg("04", "Also run the tests"),
 				line("05", "event_msg", `{"type":"task_complete","turn_id":"t1","completed_at":1794045610,"last_agent_message":"Done."}`),
 			},
-			want: []string{"model_change", "turn_start@1794045600000:Fix the build", "tool_call", "message_absorbed:Also run the tests", "turn_end:Done."},
+			want: []string{"turn_start@1794045600000:Fix the build", "model_change", "tool_call", "message_absorbed:Also run the tests", "turn_end:Done."},
 		},
 		{
 			name: "turn without a prompt",

@@ -144,10 +144,7 @@ func (p *CodexParser) beginTurn(start ParsedEvent) []ParsedEvent {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var events []ParsedEvent
-	if p.pendingTurnStart != nil {
-		events = append(events, *p.pendingTurnStart)
-	}
+	events := p.releaseTurnStartLocked()
 	p.turnOpen = true
 	p.pendingTurnStart = &start
 	return events
@@ -166,14 +163,13 @@ func (p *CodexParser) promptEvents(prompt []ParsedEvent) []ParsedEvent {
 	data := prompt[0].Data
 	switch {
 	case p.pendingTurnStart != nil:
-		start := *p.pendingTurnStart
-		p.pendingTurnStart = nil
+		start := p.pendingTurnStart
 		start.Data.Role = data.Role
 		start.Data.Content = data.Content
 		start.Data.LastPrompt = data.LastPrompt
 		start.Data.Title = data.Title
 		start.Data.Images = data.Images
-		return []ParsedEvent{start}
+		return p.releaseTurnStartLocked()
 	case p.turnOpen:
 		return []ParsedEvent{{
 			EventType: "message_absorbed",
@@ -198,10 +194,10 @@ func (p *CodexParser) pendingTurn() *ParsedEvent {
 	return p.pendingTurnStart
 }
 
-// takePendingTurnStart returns the held turn_start if it is still the one
-// held before the current record, so a turn opened by this record is not
-// reported before it begins.
-func (p *CodexParser) takePendingTurnStart(before *ParsedEvent) *ParsedEvent {
+// takePendingTurnStart returns the held turn_start, followed by the events
+// held with it, if it is still the one held before the current record, so a
+// turn opened by this record is not reported before it begins.
+func (p *CodexParser) takePendingTurnStart(before *ParsedEvent) []ParsedEvent {
 	if p == nil || before == nil {
 		return nil
 	}
@@ -210,12 +206,35 @@ func (p *CodexParser) takePendingTurnStart(before *ParsedEvent) *ParsedEvent {
 	if p.pendingTurnStart != before {
 		return nil
 	}
-	p.pendingTurnStart = nil
-	return before
+	return p.releaseTurnStartLocked()
 }
 
-// endTurn closes the open turn and returns its turn_start if no event has
-// reported it yet.
+// holdTurnEvents keeps events with the held turn_start they belong after,
+// when it is still the one held before the current record.
+func (p *CodexParser) holdTurnEvents(before *ParsedEvent, events []ParsedEvent) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pendingTurnStart != before {
+		return false
+	}
+	p.heldTurnEvents = append(p.heldTurnEvents, events...)
+	return true
+}
+
+// releaseTurnStartLocked returns the held turn_start followed by the events
+// held with it, and clears both.
+func (p *CodexParser) releaseTurnStartLocked() []ParsedEvent {
+	if p.pendingTurnStart == nil {
+		return nil
+	}
+	events := append([]ParsedEvent{*p.pendingTurnStart}, p.heldTurnEvents...)
+	p.pendingTurnStart = nil
+	p.heldTurnEvents = nil
+	return events
+}
+
+// endTurn closes the open turn and returns its turn_start, with the events
+// held with it, if no event has reported it yet.
 func (p *CodexParser) endTurn() []ParsedEvent {
 	if p == nil {
 		return nil
@@ -226,12 +245,7 @@ func (p *CodexParser) endTurn() []ParsedEvent {
 	// A tool call's output comes within its turn; an outcome still unused at
 	// the turn's end belongs to an output that arrived before its item.
 	p.callOutcomes = nil
-	start := p.pendingTurnStart
-	p.pendingTurnStart = nil
-	if start == nil {
-		return nil
-	}
-	return []ParsedEvent{*start}
+	return p.releaseTurnStartLocked()
 }
 
 // isPaginated reports whether the rollout declared paginated history. The

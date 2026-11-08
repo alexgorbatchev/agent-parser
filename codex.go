@@ -355,6 +355,10 @@ type CodexParser struct {
 	// other event arrives, so the prompt can be reported on it.
 	turnOpen         bool
 	pendingTurnStart *ParsedEvent
+	// heldTurnEvents are events of the open turn that Codex records before
+	// the turn's prompt (model changes, compactions); they follow the held
+	// turn_start when it is reported.
+	heldTurnEvents []ParsedEvent
 	// callIDs holds the IDs of tool calls recorded as response items, whose
 	// completed items repeat them. callOutcomes holds the outcome such an item
 	// recorded, for the call's result that follows it.
@@ -388,6 +392,7 @@ func (p *CodexParser) Reset() {
 	p.historyStartOrdinal = nil
 	p.turnOpen = false
 	p.pendingTurnStart = nil
+	p.heldTurnEvents = nil
 	p.callIDs = nil
 	p.callOutcomes = nil
 	p.paginated = false
@@ -443,11 +448,16 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 	if err != nil {
 		return nil, err
 	}
-	// The first activity of a turn reports the turn's pending start ahead of
-	// it.
-	if codexIsTurnActivity(events) {
-		if start := p.takePendingTurnStart(pending); start != nil {
-			events = append([]ParsedEvent{*start}, events...)
+	// The first activity of a turn reports the turn's pending start, and the
+	// events held with it, ahead of it. Events recorded before the turn's
+	// prompt are held with the start instead.
+	if len(events) > 0 && pending != nil {
+		if !codexIsTurnActivity(events) {
+			if p.holdTurnEvents(pending, events) {
+				return nil, nil
+			}
+		} else if start := p.takePendingTurnStart(pending); start != nil {
+			events = append(start, events...)
 		}
 	}
 	return events, nil

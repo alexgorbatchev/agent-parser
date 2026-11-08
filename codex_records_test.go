@@ -137,7 +137,8 @@ func TestCodexInterAgentMessages(t *testing.T) {
 
 func TestCodexPreTurnCompactionKeepsThePrompt(t *testing.T) {
 	// Codex compacts before recording the turn's prompt (run_turn's pre-turn
-	// auto-compaction), so the prompt still opens the turn.
+	// auto-compaction): the prompt still opens the turn, and the compaction
+	// follows the turn's start.
 	p := NewCodexParser()
 	lines := []string{
 		codexPaginatedMeta,
@@ -160,8 +161,40 @@ func TestCodexPreTurnCompactionKeepsThePrompt(t *testing.T) {
 			got = append(got, desc)
 		}
 	}
-	want := "run_started|compaction|turn_start:Continue"
+	want := "run_started|turn_start:Continue|compaction"
 	if strings.Join(got, "|") != want {
 		t.Errorf("events = %q, want %q", strings.Join(got, "|"), want)
+	}
+}
+
+func TestCodexManualCompactionStaysInItsTurn(t *testing.T) {
+	p := NewCodexParser()
+	lines := []string{
+		codexPaginatedMeta,
+		`{"timestamp":"2026-11-07T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":1794045601}}`,
+		`{"timestamp":"2026-11-07T10:00:02Z","type":"compacted","payload":{"message":"Summary.","replacement_history":[]}}`,
+		`{"timestamp":"2026-11-07T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":1794045603}}`,
+	}
+	var got []string
+	var stamps []int64
+	for _, line := range lines {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if ev.EventType != "run_started" {
+				got = append(got, ev.EventType)
+				stamps = append(stamps, ev.Timestamp)
+			}
+		}
+	}
+	if strings.Join(got, "|") != "turn_start|compaction|turn_end" {
+		t.Errorf("events = %q, want turn_start|compaction|turn_end", got)
+	}
+	for i := 1; i < len(stamps); i++ {
+		if stamps[i] < stamps[i-1] {
+			t.Errorf("timestamps go backwards: %v", stamps)
+		}
 	}
 }

@@ -91,9 +91,6 @@ func codexToolInput(resp rawCodexResponseItemPayload) map[string]interface{} {
 	if err := json.Unmarshal([]byte(text), &inputMap); err != nil || inputMap == nil {
 		inputMap = map[string]interface{}{"raw": text}
 	}
-	if inputMap == nil {
-		return nil
-	}
 
 	switch resp.Name {
 	case "exec_command":

@@ -118,11 +118,13 @@ export interface ICodexThreadSpawn {
   /** Nesting depth (1 for a direct child). */
   readonly depth: number;
   /** Optional agent path or profile definition. */
-  readonly agent_path: string | null;
+  readonly agent_path?: string | null;
   /** User-friendly nickname assigned to the subagent (e.g. "Hubble"). */
-  readonly agent_nickname: string;
+  readonly agent_nickname?: string | null;
   /** Specialized role assigned to the subagent (e.g. "explorer", "reviewer"). */
-  readonly agent_role: string;
+  readonly agent_role?: string | null;
+  /** Older name for `agent_role`. */
+  readonly agent_type?: string | null;
 }
 
 /**
@@ -136,7 +138,7 @@ export type CodexSessionSource =
   | "mcp"
   | "unknown"
   | { readonly custom: string }
-  | { readonly internal: unknown }
+  | { readonly internal: "memory_consolidation" | "guardian" }
   | { readonly subagent: CodexSubAgentSource };
 
 /**
@@ -368,6 +370,8 @@ export interface ICodexSessionMetaPayload {
   readonly agent_nickname?: string;
   /** Subagent role if applicable (e.g. "explorer"). */
   readonly agent_role?: string;
+  /** Older name for `agent_role`. */
+  readonly agent_type?: string;
   /** Multi-agent protocol version. */
   readonly multi_agent_version?: string;
   /**

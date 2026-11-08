@@ -1128,7 +1128,8 @@ export type CodexRecord =
   | ICodexSessionMetaRecord
   | ICodexTurnContextRecord
   | ICodexEventMsgRecord
-  | ICodexResponseItemRecord;
+  | ICodexResponseItemRecord
+  | ICodexCompactedRecord;
 
 // ============================================================================
 // 8. Type Guards & Helper Functions

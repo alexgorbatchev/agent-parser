@@ -444,8 +444,7 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 		return nil, err
 	}
 	// The first activity of a turn reports the turn's pending start ahead of
-	// it. A model change from turn_context, which Codex writes before the
-	// turn's prompt, is not activity.
+	// it.
 	if codexIsTurnActivity(events) {
 		if start := p.takePendingTurnStart(pending); start != nil {
 			events = append([]ParsedEvent{*start}, events...)
@@ -456,7 +455,9 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 
 func codexIsTurnActivity(events []ParsedEvent) bool {
 	for _, ev := range events {
-		if ev.EventType != "model_change" {
+		// Codex applies the turn's model and compacts history before it
+		// records the turn's prompt; neither is the turn's activity.
+		if ev.EventType != "model_change" && ev.EventType != "compaction" {
 			return true
 		}
 	}

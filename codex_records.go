@@ -21,10 +21,8 @@ func parseCodexCompacted(payload json.RawMessage, ts int64) ([]ParsedEvent, erro
 	return []ParsedEvent{{
 		EventType: "compaction",
 		Timestamp: ts,
-		Data: EventData{
-			Role:    stringPtr("assistant"),
-			Content: optionalString(compacted.Message),
-		},
+		// The harness compacts history; no conversation role applies.
+		Data: EventData{Content: optionalString(compacted.Message)},
 	}}, nil
 }
 

@@ -134,3 +134,34 @@ func TestCodexInterAgentMessages(t *testing.T) {
 		t.Errorf("empty message = %+v, %v", evs, err)
 	}
 }
+
+func TestCodexPreTurnCompactionKeepsThePrompt(t *testing.T) {
+	// Codex compacts before recording the turn's prompt (run_turn's pre-turn
+	// auto-compaction), so the prompt still opens the turn.
+	p := NewCodexParser()
+	lines := []string{
+		codexPaginatedMeta,
+		`{"timestamp":"2026-11-07T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":1794045601}}`,
+		`{"timestamp":"2026-11-07T10:00:02Z","type":"compacted","payload":{"message":"","replacement_history":[]}}`,
+		`{"timestamp":"2026-11-07T10:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue"}]}}`,
+		`{"timestamp":"2026-11-07T10:00:03Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"Continue","text_elements":[]}]}}}`,
+	}
+	var got []string
+	for _, line := range lines {
+		evs, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			desc := ev.EventType
+			if ev.Data.Content != nil {
+				desc += ":" + *ev.Data.Content
+			}
+			got = append(got, desc)
+		}
+	}
+	want := "run_started|compaction|turn_start:Continue"
+	if strings.Join(got, "|") != want {
+		t.Errorf("events = %q, want %q", strings.Join(got, "|"), want)
+	}
+}

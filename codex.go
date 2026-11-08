@@ -132,17 +132,19 @@ type rawCodexGitMeta struct {
 	RepositoryURL string `json:"repository_url"`
 }
 
+// rawCodexThreadSpawn is SubAgentSource::ThreadSpawn. agent_type is an older
+// name for agent_role.
 type rawCodexThreadSpawn struct {
 	ParentThreadID string  `json:"parent_thread_id"`
 	Depth          int     `json:"depth"`
 	AgentPath      *string `json:"agent_path"`
 	AgentNickname  string  `json:"agent_nickname"`
 	AgentRole      string  `json:"agent_role"`
+	AgentType      string  `json:"agent_type"`
 }
 
 type rawCodexSessionMetaPayload struct {
 	ID               string      `json:"id"`
-	SessionID        string      `json:"session_id,omitempty"`
 	Timestamp        string      `json:"timestamp"`
 	CWD              string      `json:"cwd"`
 	Originator       string      `json:"originator"`
@@ -155,6 +157,7 @@ type rawCodexSessionMetaPayload struct {
 	ParentThreadID    string           `json:"parent_thread_id"`
 	AgentNickname     string           `json:"agent_nickname"`
 	AgentRole         string           `json:"agent_role"`
+	AgentType         string           `json:"agent_type"`
 	MultiAgentVersion string           `json:"multi_agent_version"`
 	// SubagentHistoryStartOrdinal is the first ordinal of a forked subagent's
 	// own history; earlier records are context inherited from the parent.
@@ -163,18 +166,10 @@ type rawCodexSessionMetaPayload struct {
 	HistoryMode string `json:"history_mode,omitempty"`
 }
 
+// rawCodexTurnContextPayload holds the TurnContextItem fields the parser reads.
 type rawCodexTurnContextPayload struct {
-	TurnID            string                 `json:"turn_id"`
-	CWD               string                 `json:"cwd"`
-	CurrentDate       string                 `json:"current_date"`
-	Timezone          string                 `json:"timezone"`
-	Model             string                 `json:"model"`
-	Personality       string                 `json:"personality"`
-	ApprovalPolicy    string                 `json:"approval_policy"`
-	SandboxPolicy     map[string]interface{} `json:"sandbox_policy"`
-	CollaborationMode map[string]interface{} `json:"collaboration_mode"`
-	Summary           string                 `json:"summary"`
-	RealtimeActive    bool                   `json:"realtime_active"`
+	CWD   string `json:"cwd"`
+	Model string `json:"model"`
 }
 
 // rawCodexTokenBreakdown is Codex's TokenUsage. Cached and cache-write input
@@ -311,9 +306,10 @@ type rawCodexResponseItemPayload struct {
 	CallID string `json:"call_id"`
 	// Arguments is a JSON-encoded string for function calls and a JSON
 	// object for tool_search_call.
-	Arguments json.RawMessage    `json:"arguments"`
-	Input     interface{}        `json:"input,omitempty"`
-	Output    rawCodexToolOutput `json:"output"`
+	Arguments json.RawMessage `json:"arguments"`
+	// Input is a custom tool call's free-form string input.
+	Input  json.RawMessage    `json:"input,omitempty"`
+	Output rawCodexToolOutput `json:"output"`
 	// Tools lists the tools a tool_search_output found.
 	Tools            json.RawMessage       `json:"tools"`
 	Content          interface{}           `json:"content"`

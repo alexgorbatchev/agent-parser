@@ -73,28 +73,23 @@ func codexToolCallEvents(resp rawCodexResponseItemPayload, ts int64, p *CodexPar
 	return []ParsedEvent{{EventType: eventType, Timestamp: ts, Data: data}}
 }
 
-// codexToolInput decodes a call's arguments or input into a map, keeping text
-// that is not a JSON object under "raw", and adds the input keys other
-// harnesses use for the same values.
+// codexToolInput decodes a function call's arguments or a custom tool call's
+// input into a map, keeping text that is not a JSON object under "raw", and
+// adds the input keys other harnesses use for the same values.
 func codexToolInput(resp rawCodexResponseItemPayload) map[string]interface{} {
-	var inputMap map[string]interface{}
-	var arguments string
-	if len(resp.Arguments) > 0 && json.Unmarshal(resp.Arguments, &arguments) != nil {
-		arguments = ""
+	// Function calls carry JSON-encoded arguments; custom tool calls carry
+	// free-form input, which may itself be JSON.
+	raw := resp.Arguments
+	if resp.Type == "custom_tool_call" {
+		raw = resp.Input
 	}
-	if arguments != "" {
-		if err := json.Unmarshal([]byte(arguments), &inputMap); err != nil {
-			inputMap = map[string]interface{}{"raw": arguments}
-		}
-	} else if resp.Input != nil {
-		switch in := resp.Input.(type) {
-		case map[string]interface{}:
-			inputMap = in
-		case string:
-			if err := json.Unmarshal([]byte(in), &inputMap); err != nil {
-				inputMap = map[string]interface{}{"raw": in}
-			}
-		}
+	var text string
+	if len(raw) == 0 || json.Unmarshal(raw, &text) != nil || text == "" {
+		return nil
+	}
+	var inputMap map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &inputMap); err != nil || inputMap == nil {
+		inputMap = map[string]interface{}{"raw": text}
 	}
 	if inputMap == nil {
 		return nil

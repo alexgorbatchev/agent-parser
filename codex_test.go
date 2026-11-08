@@ -1739,8 +1739,8 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("session_meta with legacy session_id alias", func(t *testing.T) {
-		line := []byte(`{"type":"session_meta","timestamp":"2026-06-12T16:08:36.000Z","payload":{"session_id":"legacy-ses-999","cwd":"/repo"}}`)
+	t.Run("session_meta session_id is the root thread, not the session", func(t *testing.T) {
+		line := []byte(`{"type":"session_meta","timestamp":"2026-06-12T16:08:36.000Z","payload":{"id":"legacy-ses-999","session_id":"root-thread","cwd":"/repo"}}`)
 		evs, err := ParseCodexLine(line)
 		if err != nil || len(evs) != 1 {
 			t.Fatalf("unexpected result: evs=%v err=%v", evs, err)
@@ -1761,7 +1761,7 @@ func TestParseCodexLine(t *testing.T) {
 				"type": "custom_tool_call",
 				"name": "mcp_browser_click",
 				"call_id": "call_mcp_001",
-				"arguments": "{\"element_id\": \"btn-submit\"}"
+				"input": "{\"element_id\": \"btn-submit\"}"
 			}
 		}`)
 		evs, err := ParseCodexLine(line)
@@ -1779,7 +1779,7 @@ func TestParseCodexLine(t *testing.T) {
 		}
 	})
 
-	t.Run("response_item custom_tool_call with input map", func(t *testing.T) {
+	t.Run("response_item custom_tool_call with object input is not Codex's shape", func(t *testing.T) {
 		line := []byte(`{
 			"type": "response_item",
 			"timestamp": "2026-06-12T16:08:44.000Z",
@@ -1797,17 +1797,18 @@ func TestParseCodexLine(t *testing.T) {
 		if evs[0].EventType != "tool_call" {
 			t.Errorf("EventType = %q, want 'tool_call'", evs[0].EventType)
 		}
-		if evs[0].Data.ToolInput["query"] != "auth handlers" {
-			t.Errorf("ToolInput mismatch: %+v", evs[0].Data.ToolInput)
+		// Codex writes custom tool input as a string.
+		if evs[0].Data.ToolInput != nil {
+			t.Errorf("ToolInput = %+v, want nil", evs[0].Data.ToolInput)
 		}
 	})
 
-	t.Run("response_item function_call with input string", func(t *testing.T) {
+	t.Run("response_item custom_tool_call with JSON string input", func(t *testing.T) {
 		line := []byte(`{
 			"type": "response_item",
 			"timestamp": "2026-06-12T16:08:44.000Z",
 			"payload": {
-				"type": "function_call",
+				"type": "custom_tool_call",
 				"name": "exec_command",
 				"call_id": "call_exec_input_str",
 				"input": "{\"cmd\": \"git status\"}"
@@ -1858,10 +1859,7 @@ func TestCodexParser_NormalizedFileModification(t *testing.T) {
 			"type":    "custom_tool_call",
 			"name":    "write_file",
 			"call_id": "call_write_1",
-			"input": map[string]interface{}{
-				"path":    "test.txt",
-				"content": "hello world",
-			},
+			"input":   `{"path":"test.txt","content":"hello world"}`,
 		}
 		raw := map[string]interface{}{
 			"type":      "response_item",
@@ -2292,5 +2290,23 @@ func TestCodexModelFromThreadSettings(t *testing.T) {
 	empty := `{"timestamp":"2026-11-07T10:00:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":""}}}`
 	if evs, err := ParseCodexLine([]byte(empty)); err != nil || len(evs) != 0 {
 		t.Errorf("empty settings = %+v, %v", evs, err)
+	}
+}
+
+func TestCodexSubagentSources(t *testing.T) {
+	tests := map[string]string{
+		`"source":{"subagent":"review"}`:           "Codex Subagent: (review)",
+		`"source":{"subagent":{"other":"triage"}}`: "Codex Subagent: (triage)",
+		`"source":{"subagent":{"thread_spawn":{"parent_thread_id":"p","depth":1,"agent_type":"worker"}}}`: "Codex Subagent: (worker)",
+		`"source":"cli","agent_nickname":"Ada","agent_type":"explorer"`:                                   "Codex Subagent: Ada (explorer)",
+		`"source":"mcp"`:            "Codex Session s1",
+		`"source":{"custom":"bot"}`: "Codex Session s1",
+	}
+	for fields, want := range tests {
+		line := `{"timestamp":"2026-11-07T10:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/work",` + fields + `}}`
+		evs, err := ParseCodexLine([]byte(line))
+		if err != nil || len(evs) != 1 || *evs[0].Data.Title != want {
+			t.Errorf("%s: events = %+v, %v; want title %q", fields, evs, err, want)
+		}
 	}
 }

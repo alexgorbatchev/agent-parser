@@ -126,21 +126,29 @@ export interface ICodexThreadSpawn {
 }
 
 /**
- * Discriminator indicating whether the session is a root CLI session or a spawned subagent.
+ * `SessionSource`: a lowercase string for unit variants, or an object keyed by the variant.
+ * Unrecognized values deserialize as `"unknown"`.
  */
 export type CodexSessionSource =
   | "cli"
   | "vscode"
   | "exec"
-  | {
-      readonly subagent: {
-        readonly thread_spawn: ICodexThreadSpawn;
-      };
-    }
-  | {
-      /** Older format (early 2026): subagent role string directly. */
-      readonly subagent: string;
-    };
+  | "mcp"
+  | "unknown"
+  | { readonly custom: string }
+  | { readonly internal: unknown }
+  | { readonly subagent: CodexSubAgentSource };
+
+/**
+ * `SubAgentSource`. A string names the subagent's kind; `thread_spawn` describes a spawned
+ * agent, whose `agent_role` older rollouts write as `agent_type`.
+ */
+export type CodexSubAgentSource =
+  | "review"
+  | "compact"
+  | "memory_consolidation"
+  | { readonly thread_spawn: ICodexThreadSpawn }
+  | { readonly other: string };
 
 // ============================================================================
 // 3. Git Metadata
@@ -329,8 +337,8 @@ export interface ICodexCloseAgentArgs {
  * First record in every Codex rollout file: session identity, CWD, provider, and git.
  */
 export interface ICodexSessionMetaPayload {
-  /** Unique session UUIDv7 matching the filename. */
-  readonly id?: string;
+  /** Thread ID (UUIDv7) matching the filename. */
+  readonly id: string;
   /**
    * ID of the root thread of this session: equal to `id` for a root session, and the
    * root's ID for a subagent.
@@ -390,15 +398,10 @@ export interface ICodexSessionMetaRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
-  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
-  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: ICodexSessionMetaPayload;
 }
 
-/**
- * Per-turn execution context: model settings, sandbox permissions, and approval policy.
- */
-/** Per-turn settings (`TurnContextItem`). */
+/** Per-turn execution context (`TurnContextItem`): model, sandbox permissions, approval policy. */
 export interface ICodexTurnContextPayload {
   readonly turn_id?: string;
   readonly root_turn_id?: string;
@@ -409,7 +412,8 @@ export interface ICodexTurnContextPayload {
   readonly model: string;
   readonly approval_policy: string;
   readonly approvals_reviewer?: string;
-  readonly permission_profile: Readonly<Record<string, unknown>>;
+  /** Absent in older histories, which record only `sandbox_policy`. */
+  readonly permission_profile?: Readonly<Record<string, unknown>>;
   readonly sandbox_policy?: Readonly<Record<string, unknown>>;
   readonly collaboration_mode?: {
     readonly mode: string;
@@ -430,8 +434,6 @@ export interface ICodexTurnContextRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
-  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
-  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: ICodexTurnContextPayload;
 }
 
@@ -855,8 +857,6 @@ export interface ICodexEventMsgRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
-  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
-  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: CodexEventMsgPayload;
 }
 
@@ -885,6 +885,7 @@ export interface ICodexFunctionCallPayload {
   readonly namespace?: string;
   /** Unique invocation ID. */
   readonly call_id: string;
+  readonly status?: string;
   /** JSON-encoded argument string. */
   readonly arguments: string;
 }
@@ -978,8 +979,10 @@ export interface ICodexCustomToolCallPayload {
   readonly id?: string;
   /** Name of the custom tool (e.g. "apply_patch", "exec"). */
   readonly name: string;
+  readonly namespace?: string;
   /** Unique invocation ID. */
   readonly call_id: string;
+  readonly status?: string;
   /** Free-form tool input, such as an apply_patch patch or a code-mode script. */
   readonly input: string;
 }
@@ -1041,7 +1044,7 @@ export interface ICodexResponseItemRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
-  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
+  /** Response item metadata, such as `{ client_authored, mcp_attribution }`. */
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: CodexResponseItemPayload;
 }

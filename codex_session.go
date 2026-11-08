@@ -24,11 +24,7 @@ func parseCodexSessionMeta(payload json.RawMessage, ts int64, p *CodexParser) ([
 	}
 
 	parentThreadID, nickname, role := codexSubagentIdentity(meta)
-
 	sessionID := meta.ID
-	if sessionID == "" {
-		sessionID = meta.SessionID
-	}
 
 	return []ParsedEvent{{
 		EventType: "run_started",
@@ -43,50 +39,52 @@ func parseCodexSessionMeta(payload json.RawMessage, ts int64, p *CodexParser) ([
 	}}, nil
 }
 
-// codexSubagentIdentity resolves the parent thread, nickname and role from the
-// top-level fields, overridden by a thread_spawn subagent source.
+// codexSubagentIdentity resolves the parent thread, nickname and role of a
+// subagent session from SessionMeta's own fields, overridden by a thread_spawn
+// subagent source. Other subagent sources (review, compact,
+// memory_consolidation, other) name the subagent's kind, which stands in for
+// the role when there is none.
 func codexSubagentIdentity(meta rawCodexSessionMetaPayload) (parentThreadID, nickname, role string) {
 	parentThreadID = meta.ParentThreadID
 	nickname = meta.AgentNickname
-	role = meta.AgentRole
+	role = firstNonEmpty(meta.AgentRole, meta.AgentType)
 
 	sm, ok := meta.Source.(map[string]interface{})
 	if !ok {
 		return parentThreadID, nickname, role
 	}
-	subVal, exists := sm["subagent"]
-	if !exists || subVal == nil {
-		return parentThreadID, nickname, role
-	}
-	if subStr, ok := subVal.(string); ok {
-		if subStr != "" && role == "" {
-			role = subStr
+	switch sub := sm["subagent"].(type) {
+	case string:
+		if role == "" {
+			role = sub
 		}
-		return parentThreadID, nickname, role
-	}
-	subMap, ok := subVal.(map[string]interface{})
-	if !ok {
-		return parentThreadID, nickname, role
-	}
-	spawnVal, ok := subMap["thread_spawn"]
-	if !ok || spawnVal == nil {
-		return parentThreadID, nickname, role
-	}
-	var spawn rawCodexThreadSpawn
-	data, err := json.Marshal(spawnVal)
-	if err != nil || json.Unmarshal(data, &spawn) != nil {
-		return parentThreadID, nickname, role
-	}
-	if spawn.ParentThreadID != "" {
-		parentThreadID = spawn.ParentThreadID
-	}
-	if spawn.AgentNickname != "" {
-		nickname = spawn.AgentNickname
-	}
-	if spawn.AgentRole != "" {
-		role = spawn.AgentRole
+	case map[string]interface{}:
+		if other, ok := sub["other"].(string); ok && role == "" {
+			role = other
+		}
+		spawnVal, ok := sub["thread_spawn"]
+		if !ok || spawnVal == nil {
+			break
+		}
+		var spawn rawCodexThreadSpawn
+		data, err := json.Marshal(spawnVal)
+		if err != nil || json.Unmarshal(data, &spawn) != nil {
+			break
+		}
+		parentThreadID = firstNonEmpty(spawn.ParentThreadID, parentThreadID)
+		nickname = firstNonEmpty(spawn.AgentNickname, nickname)
+		role = firstNonEmpty(spawn.AgentRole, spawn.AgentType, role)
 	}
 	return parentThreadID, nickname, role
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func codexSessionTitle(sessionID, parentThreadID, nickname, role string) string {

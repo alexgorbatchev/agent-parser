@@ -216,8 +216,6 @@ type rawCodexEventMsgPayload struct {
 	Info               *rawCodexTokenCountInfo `json:"info"`
 	RateLimits         *rawCodexRateLimits     `json:"rate_limits,omitempty"`
 	ModelContextWindow int64                   `json:"model_context_window,omitempty"`
-	Summary            []rawCodexSummaryPart   `json:"summary"`
-	EncryptedContent   string                  `json:"encrypted_content"`
 }
 
 // rawCodexErrorEvent is Codex's ErrorEvent as stored on turn completions.
@@ -233,8 +231,6 @@ type rawCodexSummaryPart struct {
 }
 
 type rawCodexAgentMessage struct {
-	Type    string `json:"type"`
-	ID      string `json:"id"`
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`

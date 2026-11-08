@@ -95,7 +95,7 @@ func main() {
 | `NewClaudeCodeParser` | `() *ClaudeCodeParser` | Constructs a Claude Code streaming JSONL parser with multi-block deduplication |
 | `ParsePiLine` | `(line []byte, fallbackCWD string) ([]ParsedEvent, error)` | Parses a single Pi session JSONL entry |
 | `NewCodexParser` | `() *CodexParser` | Constructs an OpenAI Codex CLI rollout parser with stateful turn tracking |
-| `ParseCodexLine` | `(line []byte) ([]ParsedEvent, error)` | Stateless helper parsing an OpenAI Codex line without cross-line context |
+| `ParseCodexLine` | `(line []byte) ([]ParsedEvent, error)` | Stateless helper parsing one OpenAI Codex line without cross-line context. It cannot apply rules that need the whole rollout (turn boundaries, forked-subagent inherited history, usage re-send detection, paginated prompt and message sources, nested tool items); use `CodexParser` to parse a rollout |
 | `OpenOpencodeDB` | `(dbPath string) (*OpencodeDB, error)` | Opens an OpenCode SQLite database in read-only mode |
 | `NormalizeFileModification` | `(toolName string, toolInput map[string]interface{}) *FileModification` | Normalizes tool parameters into canonical diffs |
 

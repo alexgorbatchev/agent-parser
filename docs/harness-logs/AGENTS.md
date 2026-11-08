@@ -10,7 +10,7 @@ This directory contains the canonical TypeScript specifications, schemas, data s
 
 > **CRITICAL ARCHITECTURAL CONTRACT**:
 > The TypeScript definitions in this directory (`claude-code.ts`, `pi.ts`, `codex.ts`, `opencode.ts`) serve as the **canonical type reference** and single source of truth for all harness log formats and cross-version permutations.
-> All Go types, unmarshaling structs, and parser implementations across `packages/agent-parser/`, `packages/agent-common/types/`, `packages/agent-observer/`, and `packages/agent-ingester/` **MUST be kept strictly in sync** with these canonical specifications whenever schemas, aliases, or record variants are added or modified.
+> All Go types, unmarshaling structs, and parser implementations in this repository (`types.go` and the per-harness parser files such as `codex*.go`, `claudecode.go`, `pi.go`, and `opencode.go`) **MUST be kept strictly in sync** with these canonical specifications whenever schemas, aliases, or record variants are added or modified.
 
 ## Supported Harnesses
 
@@ -66,6 +66,8 @@ just typecheck docs/harness-logs/opencode.ts
 - Codex assistant messages are recorded twice: as an assistant `response_item` and, in paginated history, as a completed `AgentMessage` item with the same id or text (in legacy history, as an `event_msg` `agent_message` copy). Report each once: from the `AgentMessage` item in paginated history (stateful parser), otherwise from the `response_item`; never from the legacy `agent_message` event. An `AgentMessage` item with `questions` has the question tool call's ID and projects that call, which already reports the `question_prompt`.
 - Codex `apply_patch` input is Codex's own patch grammar (`*** Begin Patch`), not a unified diff. The applied result is a completed `FileChange` item (paginated) or a `patch_apply_end` event (legacy), whose `changes` map each path to `add {content}`, `delete {content}` or `update {unified_diff, move_path}`. Emit one `file_modification` per changed path from those, only when the status is `completed` (or `success` is true), with actions `WRITE`, `DELETE` and `EDIT` (`PreviousPath` for moves).
 - Tool calls made from code-mode scripts have no `function_call` record; paginated history records them only as completed items (`CommandExecution`, `McpToolCall`, `WebSearch`, `Extension`, `ImageView`, `DynamicToolCall`). The stateful parser emits a `tool_call` at `started_at_ms` and a `tool_result` at completion for each, named `exec_command`, `mcp__<server>__<tool>` (Codex's qualified MCP name), `web_search`, the extension `kind`, `view_image`, or the dynamic tool's name. Outcomes come from `exit_code`, `status`, MCP `result.isError`/`error`, extension `failure` and dynamic `success`; items without one leave `IsError` nil. Items whose `id` repeats a tool call already recorded as a response item (including `CollabAgentToolCall` and `FileChange`) emit no tool events; Codex writes them before the call's output, so their outcome sets that result's `IsError` when the output has no status header. A `CommandExecution` with `source: "user_shell"` is a command the user ran with `!` and is not a tool call. Item paths and `cwd` are file URLs; report them as paths. An image generation extension's base64 `result` is reported as an image.
+- Legacy history persists `event_msg` `agent_reasoning` as a copy of each `response_item` reasoning summary; reasoning is reported from the `response_item` only.
+- A paginated rollout whose `session_meta` has `history_base` continues another rollout: its records start at `history_base.end_ordinal_exclusive`, and the inherited prefix lives in the rollout named by `history_base.thread_id`, not in this file.
 - A forked Codex subagent rollout starts with its own `session_meta` at ordinal 0, then replays the parent's history (including the parent's `session_meta`) as inherited model context up to the child's `subagent_history_start_ordinal`. Codex keeps records below that ordinal out of the child's turns and items, so the stateful parser emits nothing for them. The stateless parser cannot see the boundary.
 - OpenCode `session.model`, `message.data`, and `part.data` columns are JSON stored as TEXT in SQLite rows.
 
@@ -134,7 +136,7 @@ Claude Code transcript directories contain `last-prompt` pointer records that id
 
 ### Always
 
-- Treat `docs/harness-logs/*.ts` as the canonical type reference; ensure Go types and unmarshaling structs across `packages/agent-parser/`, `packages/agent-common/types/`, and downstream ingest pipelines are kept strictly in sync with these specifications.
+- Treat `docs/harness-logs/*.ts` as the canonical type reference; keep this repository's Go types and unmarshaling structs strictly in sync with these specifications.
 - Use strict TypeScript typing: NO `any`, NO unsafe `as Type` casts (use type guards), and declare explicit return types on all exported functions.
 - Open SQLite databases for reading with `readonly: true` / URI `?mode=ro`.
 - Automatically record any new user instructions or schema changes into the appropriate `AGENTS.md` file without requiring the user to ask (checking first if conflicts exist).
@@ -142,8 +144,8 @@ Claude Code transcript directories contain `last-prompt` pointer records that id
 
 ### Ask First
 
-- Modifying cross-harness normalized schemas in `packages/ui-web/src/types/index.ts` or Go structs.
-- Adding dependencies to `packages/*`.
+- Modifying the cross-harness normalized types in `types.go` (`ParsedEvent`, `EventData` and their nested types).
+- Adding Go module dependencies.
 
 ### Never
 

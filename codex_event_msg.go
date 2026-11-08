@@ -28,8 +28,6 @@ func parseCodexEventMsg(payload json.RawMessage, ts int64, p *CodexParser) ([]Pa
 		// Legacy-history rollouts persist this event as a copy of the
 		// assistant message already recorded as a response_item.
 		return nil, nil
-	case "reasoning":
-		return codexThinkingEvents(evt.Summary, ts), nil
 	case "token_count":
 		return codexTokenCountEvents(evt, ts, p), nil
 	case "task_started":

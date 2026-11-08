@@ -130,6 +130,8 @@ export interface ICodexThreadSpawn {
  */
 export type CodexSessionSource =
   | "cli"
+  | "vscode"
+  | "exec"
   | {
       readonly subagent: {
         readonly thread_spawn: ICodexThreadSpawn;
@@ -329,7 +331,10 @@ export interface ICodexCloseAgentArgs {
 export interface ICodexSessionMetaPayload {
   /** Unique session UUIDv7 matching the filename. */
   readonly id?: string;
-  /** Legacy session ID field name used in older rollout versions. */
+  /**
+   * ID of the root thread of this session: equal to `id` for a root session, and the
+   * root's ID for a subagent.
+   */
   readonly session_id?: string;
   /** ISO 8601 creation timestamp. */
   readonly timestamp: string;
@@ -364,6 +369,15 @@ export interface ICodexSessionMetaPayload {
    */
   readonly subagent_history_start_ordinal?: number;
   /**
+   * Prefix of another paginated rollout this one continues: this file's records start at
+   * `end_ordinal_exclusive`, and the prefix lives in the rollout `thread_id` names.
+   */
+  readonly history_base?: {
+    readonly thread_id: string;
+    readonly end_ordinal_exclusive: number;
+    readonly end_byte_offset: number;
+  };
+  /**
    * `ThreadHistoryMode`; absent means "legacy". Paginated rollouts persist
    * completed turn items (`item_completed`) instead of the legacy event
    * projections such as `user_message` and `agent_message`.
@@ -376,37 +390,39 @@ export interface ICodexSessionMetaRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
+  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: ICodexSessionMetaPayload;
 }
 
 /**
  * Per-turn execution context: model settings, sandbox permissions, and approval policy.
  */
+/** Per-turn settings (`TurnContextItem`). */
 export interface ICodexTurnContextPayload {
-  readonly turn_id: string;
+  readonly turn_id?: string;
+  readonly root_turn_id?: string;
   readonly cwd: string;
-  readonly current_date: string;
-  readonly timezone: string;
-  /** Active model for this turn (e.g. "gpt-5.4", "o3-mini"). */
+  readonly current_date?: string;
+  readonly timezone?: string;
+  /** Active model for this turn (e.g. "gpt-5.4"). */
   readonly model: string;
-  readonly personality: string;
-  readonly approval_policy: "on-request" | "never" | "always" | string;
-  readonly sandbox_policy: {
-    readonly type: string;
-    readonly writable_roots: readonly string[];
-    readonly network_access: boolean;
-    readonly [key: string]: unknown;
-  };
-  readonly collaboration_mode: {
-    readonly mode: "default" | "plan" | string;
-    readonly settings?: Record<string, unknown>;
-  };
-  readonly summary: string;
-  readonly truncation_policy: {
+  readonly approval_policy: string;
+  readonly approvals_reviewer?: string;
+  readonly permission_profile: Readonly<Record<string, unknown>>;
+  readonly sandbox_policy?: Readonly<Record<string, unknown>>;
+  readonly collaboration_mode?: {
     readonly mode: string;
-    readonly limit: number;
+    readonly settings?: Readonly<Record<string, unknown>>;
   };
-  readonly realtime_active: boolean;
+  readonly effort?: string | null;
+  readonly summary?: string;
+  readonly realtime_active?: boolean;
+  readonly multi_agent_version?: string;
+  readonly workspace_roots?: readonly string[];
+  readonly disabled_plugin_ids?: readonly string[];
+  readonly comp_hash?: string;
+  readonly [setting: string]: unknown;
 }
 
 export interface ICodexTurnContextRecord {
@@ -414,6 +430,8 @@ export interface ICodexTurnContextRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
+  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: ICodexTurnContextPayload;
 }
 
@@ -436,15 +454,13 @@ export interface ICodexAgentMessagePayload {
   readonly message: string;
 }
 
+/**
+ * Legacy-history copy of a reasoning summary (`EventMsg::AgentReasoning`); the
+ * `response_item` reasoning is the source parsers report.
+ */
 export interface ICodexReasoningPayload {
-  readonly type: "reasoning";
-  /** Summary or status of reasoning tokens. */
-  readonly summary?: readonly {
-    readonly type: string;
-    readonly text: string;
-  }[];
-  /** Encrypted raw reasoning payload (unrecoverable without key). */
-  readonly encrypted_content?: string;
+  readonly type: "agent_reasoning";
+  readonly text: string;
 }
 
 export interface ICodexTokenCountPayload {
@@ -839,6 +855,8 @@ export interface ICodexEventMsgRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
+  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: CodexEventMsgPayload;
 }
 
@@ -860,14 +878,15 @@ export interface ICodexRawMessagePayload {
 
 export interface ICodexFunctionCallPayload {
   readonly type: "function_call";
-  /** Name of the tool (e.g. "exec_command", "spawn_agent", "apply_patch"). */
+  readonly id?: string;
+  /** Name of the tool (e.g. "exec_command", "spawn_agent"). */
   readonly name: string;
+  /** Tool namespace, such as "collaboration" or "clock". */
+  readonly namespace?: string;
   /** Unique invocation ID. */
   readonly call_id: string;
   /** JSON-encoded argument string. */
-  readonly arguments?: string;
-  /** Alternative parameter payload used in some tool calls or bridges. */
-  readonly input?: string | Readonly<Record<string, unknown>>;
+  readonly arguments: string;
 }
 
 /** Tool output body serialized directly as a string or an ordered content array.
@@ -956,14 +975,13 @@ export interface ICodexFunctionCallOutputPayload {
 
 export interface ICodexCustomToolCallPayload {
   readonly type: "custom_tool_call";
-  /** Name of the custom tool or MCP method. */
+  readonly id?: string;
+  /** Name of the custom tool (e.g. "apply_patch", "exec"). */
   readonly name: string;
   /** Unique invocation ID. */
   readonly call_id: string;
-  /** JSON-encoded argument string. */
-  readonly arguments?: string;
-  /** Alternative parameter payload used in some tool calls or bridges. */
-  readonly input?: string | Readonly<Record<string, unknown>>;
+  /** Free-form tool input, such as an apply_patch patch or a code-mode script. */
+  readonly input: string;
 }
 
 export interface ICodexCustomToolCallOutputPayload {
@@ -991,8 +1009,8 @@ export interface ICodexToolSearchCallPayload {
   readonly status?: string;
   /** "client" or "server". */
   readonly execution: string;
-  /** For example `{ query, limit }`. */
-  readonly arguments: Readonly<Record<string, unknown>>;
+  /** Search arguments, for example `{ query, limit }` (`serde_json::Value`). */
+  readonly arguments: unknown;
 }
 
 /**
@@ -1023,6 +1041,8 @@ export interface ICodexResponseItemRecord {
   readonly timestamp: string;
   /** Position of the record in a paginated-history rollout; absent in legacy rollouts. */
   readonly ordinal?: number;
+  /** Line metadata, such as `{ client_authored, mcp_attribution }`. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly payload: CodexResponseItemPayload;
 }
 

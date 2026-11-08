@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -251,8 +252,12 @@ func codexJSONText(raw json.RawMessage) *string {
 	if json.Unmarshal(raw, &text) == nil {
 		return &text
 	}
-	compact := strings.TrimSpace(string(raw))
-	return &compact
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) != nil {
+		return nil
+	}
+	out := compact.String()
+	return &out
 }
 
 func codexJSONObject(raw json.RawMessage) map[string]interface{} {

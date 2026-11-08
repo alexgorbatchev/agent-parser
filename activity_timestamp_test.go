@@ -136,6 +136,7 @@ func TestActivityTimestampsAgreeWithParsedRecords(t *testing.T) {
 		{`{"type":"user","timestamp":"` + stamp + `","message":{"role":"user","content":"Run tests"}}`, ClaudeCodeActivityTimestamp, NewClaudeCodeParser().ParseLine},
 		{`{"type":"message","timestamp":"` + stamp + `","message":{"role":"user","content":"Run tests"}}`, PiActivityTimestamp, func(line []byte) ([]ParsedEvent, error) { return ParsePiLine(line, "") }},
 		{`{"type":"response_item","timestamp":"` + stamp + `","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Run tests"}]}}`, CodexActivityTimestamp, ParseCodexLine},
+		{`{"type":"response_item","timestamp":"` + stamp + `","payload":{"type":"tool_search_call","call_id":"ts_1","status":"completed","execution":"client","arguments":{"query":"agents","limit":5}}}`, CodexActivityTimestamp, ParseCodexLine},
 	} {
 		got, found, err := tt.activity([]byte(tt.line))
 		if err != nil || !found {

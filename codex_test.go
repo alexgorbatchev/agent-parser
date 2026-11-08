@@ -360,22 +360,12 @@ func TestParseCodexLine(t *testing.T) {
 			t.Fatalf("agent_message event = %v, %v; want no events", evs1, err)
 		}
 
-		reasoningLine := `{
-			"type": "event_msg",
-			"timestamp": "2026-06-12T16:08:41.000Z",
-			"payload": {
-				"type": "reasoning",
-				"summary": [
-					{"type": "text", "text": "Analyzing the parser code structure..."}
-				]
-			}
-		}`
+		// Legacy history copies response_item reasoning into an
+		// agent_reasoning event; the response_item alone reports it.
+		reasoningLine := `{"timestamp":"2026-06-12T16:08:41.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Analyzing the parser code structure..."}}`
 		evs2, err := ParseCodexLine([]byte(reasoningLine))
-		if err != nil || len(evs2) != 1 {
-			t.Fatalf("failed reasoning parsing: evs=%v err=%v", evs2, err)
-		}
-		if evs2[0].EventType != "thinking" || *evs2[0].Data.Content != "Analyzing the parser code structure..." {
-			t.Errorf("unexpected thinking event: %+v", evs2[0])
+		if err != nil || len(evs2) != 0 {
+			t.Fatalf("agent_reasoning event = %v, %v; want no events", evs2, err)
 		}
 	})
 

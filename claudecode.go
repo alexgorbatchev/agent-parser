@@ -33,8 +33,11 @@ type rawUsage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	ThinkingTokens           int64 `json:"thinking_tokens"`
-	ReasoningTokens          int64 `json:"reasoning_tokens"`
+	// OutputTokensDetails breaks down OutputTokens; ThinkingTokens is the
+	// part spent on extended thinking.
+	OutputTokensDetails *struct {
+		ThinkingTokens int64 `json:"thinking_tokens"`
+	} `json:"output_tokens_details,omitempty"`
 }
 
 type rawMessage struct {
@@ -781,9 +784,9 @@ func parseClaudeCodeLineEvents(
 					var usage *TokenUsage
 					if !isDuplicateRequest && raw.Message.Usage != nil {
 						u := raw.Message.Usage
-						reasoning := u.ThinkingTokens
-						if reasoning == 0 {
-							reasoning = u.ReasoningTokens
+						var reasoning int64
+						if u.OutputTokensDetails != nil {
+							reasoning = u.OutputTokensDetails.ThinkingTokens
 						}
 						total := u.InputTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 						usage = &TokenUsage{

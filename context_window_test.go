@@ -28,7 +28,7 @@ func TestContextWindowResolutionAndFullness_ClaudeCode(t *testing.T) {
 				"output_tokens": 1000,
 				"cache_read_input_tokens": 40000,
 				"cache_creation_input_tokens": 4000,
-				"thinking_tokens": 500
+				"output_tokens_details": {"thinking_tokens": 500}
 			}
 		}
 	}`, sessID)

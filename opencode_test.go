@@ -393,7 +393,7 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 	if parentSess.Title != "Fix Session Parser" || parentSess.Model != "claude-3-7-sonnet" || parentSess.IsSubagent {
 		t.Errorf("unexpected parent session: %+v", parentSess)
 	}
-	if parentSess.Cost != 0.045 || parentSess.Tokens.Total != 3500 { // 2000 input + 500 output + 1000 cacheRead + 0 cacheWrite = 3500
+	if parentSess.Cost != 0.045 || parentSess.Tokens.Total != 3700 { // 2000 input + 500 output + 200 reasoning + 1000 cacheRead + 0 cacheWrite, as OpenCode totals it
 		t.Errorf("unexpected tokens/cost: tokens=%+v, cost=%f", parentSess.Tokens, parentSess.Cost)
 	}
 
@@ -497,8 +497,9 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 	}
 
 	turnEnd := events[6]
-	if turnEnd.Data.Usage == nil || turnEnd.Data.Usage.Total != 2700 {
-		t.Errorf("turn_end usage = %+v", turnEnd.Data.Usage)
+	// OpenCode counts reasoning apart from visible output; Output includes it.
+	if u := turnEnd.Data.Usage; u == nil || u.Total != 2700 || u.Output != 700 || u.Reasoning != 200 {
+		t.Errorf("turn_end usage = %+v; want Output 700 including Reasoning 200", turnEnd.Data.Usage)
 	}
 	if turnEnd.Data.RawHarnessCost == nil || *turnEnd.Data.RawHarnessCost != 0.045 {
 		t.Errorf("turn_end cost = %v", turnEnd.Data.RawHarnessCost)

@@ -261,7 +261,7 @@ func TestClaudeCodeParser_ParseLine_Cases(t *testing.T) {
 					"output_tokens": 50,
 					"cache_read_input_tokens": 500,
 					"cache_creation_input_tokens": 50,
-					"reasoning_tokens": 20
+					"output_tokens_details": {"thinking_tokens": 20}
 				}
 			}
 		}`
@@ -361,7 +361,7 @@ func TestClaudeCodeParser_ParseLine_Cases(t *testing.T) {
 					"output_tokens": 80,
 					"cache_read_input_tokens": 100,
 					"cache_creation_input_tokens": 50,
-					"thinking_tokens": 40
+					"output_tokens_details": {"thinking_tokens": 40}
 				}
 			}
 		}`

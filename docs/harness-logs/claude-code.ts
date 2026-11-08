@@ -176,8 +176,10 @@ export interface IClaudeUsageMetadata {
   effort?: string;
   /** Geographic region where inference was executed */
   inference_geo?: string;
-  /** Output tokens dedicated to internal model reasoning / thinking */
-  reasoning_output_tokens?: number;
+  /** Breakdown of `output_tokens`; `thinking_tokens` is the part spent on extended thinking. */
+  output_tokens_details?: {
+    thinking_tokens?: number;
+  };
   /** Cumulative total tokens for the turn */
   total_tokens?: number;
 }

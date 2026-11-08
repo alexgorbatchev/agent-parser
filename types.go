@@ -24,14 +24,23 @@ type FileModification struct {
 	Content      *string    `json:"content,omitempty"`
 }
 
-// TokenUsage tracks token consumption metrics for an agent run or turn.
+// TokenUsage tracks token consumption metrics for an agent run or turn. Every
+// parser reports the same meanings, whatever the harness records.
 type TokenUsage struct {
-	Input      int64 `json:"input"`
-	Output     int64 `json:"output"`
+	// Input counts fresh input tokens, excluding CacheRead and CacheWrite.
+	Input int64 `json:"input"`
+	// Output counts every generated token, including Reasoning.
+	Output int64 `json:"output"`
+	// CacheRead and CacheWrite count input tokens read from and written to the
+	// prompt cache.
 	CacheRead  int64 `json:"cacheRead"`
 	CacheWrite int64 `json:"cacheWrite"`
-	Reasoning  int64 `json:"reasoning"`
-	Total      int64 `json:"total"`
+	// Reasoning is the part of Output spent on reasoning, when the harness
+	// reports it; it is never added to Output or Total again.
+	Reasoning int64 `json:"reasoning"`
+	// Total is Input + Output + CacheRead + CacheWrite, or the harness's own
+	// total when it records one.
+	Total int64 `json:"total"`
 }
 
 // Image is an image a harness recorded in a prompt or tool result. Data holds inline base64 bytes described by

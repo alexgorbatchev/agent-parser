@@ -126,9 +126,9 @@ export interface IOpencodeMessageTokenUsage {
   readonly total: number;
   /** Non-cached prompt / input tokens. */
   readonly input: number;
-  /** Completion / output tokens. */
+  /** Visible output tokens, excluding reasoning (core `session/usage.ts`). */
   readonly output: number;
-  /** Reasoning / thinking tokens included in completion. */
+  /** Reasoning / thinking tokens, counted separately from `output`. */
   readonly reasoning?: number;
   /** Cache read and write token counts. */
   readonly cache: {

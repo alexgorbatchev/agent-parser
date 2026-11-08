@@ -741,13 +741,16 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 			var usage *TokenUsage
 			if msg.Data.Tokens != nil {
 				u := msg.Data.Tokens
+				// OpenCode counts reasoning separately from visible output
+				// (core session/usage.ts); Output includes it here.
+				output := u.Output + u.Reasoning
 				total := u.Total
 				if total == 0 {
-					total = u.Input + u.Output + u.Cache.Read + u.Cache.Write
+					total = u.Input + output + u.Cache.Read + u.Cache.Write
 				}
 				usage = &TokenUsage{
 					Input:      u.Input,
-					Output:     u.Output,
+					Output:     output,
 					CacheRead:  u.Cache.Read,
 					CacheWrite: u.Cache.Write,
 					Reasoning:  u.Reasoning,
@@ -875,7 +878,9 @@ func scanOpencodeSession(s rowScanner) (*OpencodeSession, error) {
 		TimeCreated: timeCreated,
 		TimeUpdated: timeUpdated,
 		Tokens: OpencodeTokens{
-			Total:     tokensInput + tokensOutput + tokensCacheRead + tokensCacheWrite,
+			// OpenCode's total includes reasoning, which it counts apart
+			// from output (schema token-usage.ts total).
+			Total:     tokensInput + tokensOutput + tokensReasoning + tokensCacheRead + tokensCacheWrite,
 			Input:     tokensInput,
 			Output:    tokensOutput,
 			Reasoning: tokensReasoning,

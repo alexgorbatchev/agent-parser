@@ -436,7 +436,8 @@ func ParsePiLine(line []byte, fallbackCWD string) ([]ParsedEvent, error) {
 					total = u.TotalTokens
 				}
 				if total == 0 {
-					total = u.Input + u.Output + u.CacheRead + u.CacheWrite + u.Reasoning
+					// Pi's reasoning is a subset of output (pi-ai Usage).
+					total = u.Input + u.Output + u.CacheRead + u.CacheWrite
 				}
 				usage = &TokenUsage{
 					Input:      u.Input,

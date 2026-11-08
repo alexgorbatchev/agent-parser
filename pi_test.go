@@ -310,8 +310,9 @@ func TestParsePiLine(t *testing.T) {
 		if u == nil {
 			t.Fatalf("usage is nil")
 		}
-		if u.Total != 105 {
-			t.Errorf("u.Total = %d, want 105", u.Total)
+		// Pi's reasoning is part of output, so the computed total leaves it out.
+		if u.Total != 90 || u.Reasoning != 15 {
+			t.Errorf("u.Total = %d, Reasoning = %d; want 90 and 15", u.Total, u.Reasoning)
 		}
 		if evs[2].Data.RawHarnessCost == nil || *evs[2].Data.RawHarnessCost != 0.005 {
 			t.Errorf("cost mismatch: %v", evs[2].Data.RawHarnessCost)

@@ -259,7 +259,7 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 			time_created, time_updated, time_archived, metadata
 		) VALUES (
 			'ses_parent', 'proj_1', NULL, 'fix-session-parser', '/workspace/agent-status', 'Fix Session Parser',
-			'0.4.1', 'build', '{"id":"claude-3-7-sonnet","providerID":"anthropic"}', 0.045, 2000, 500,
+			'1.4.0', 'build', '{"id":"claude-3-7-sonnet","providerID":"anthropic"}', 0.045, 2000, 500,
 			200, 1000, 0, 1700000000000, 1700000010000, NULL, '{"priority":"high"}'
 		);
 	`)
@@ -393,7 +393,7 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 	if parentSess.Title != "Fix Session Parser" || parentSess.Model != "claude-3-7-sonnet" || parentSess.IsSubagent {
 		t.Errorf("unexpected parent session: %+v", parentSess)
 	}
-	if parentSess.Cost != 0.045 || parentSess.Tokens.Total != 3700 { // 2000 input + 500 output + 200 reasoning + 1000 cacheRead + 0 cacheWrite, as OpenCode totals it
+	if parentSess.Cost != 0.045 || parentSess.Tokens.Total != 3700 { // OpenCode 1.4.0: 2000 input + 500 output + 200 reasoning + 1000 cacheRead + 0 cacheWrite
 		t.Errorf("unexpected tokens/cost: tokens=%+v, cost=%f", parentSess.Tokens, parentSess.Cost)
 	}
 
@@ -497,9 +497,28 @@ func TestOpencodeDB_QueriesAndReconstruction(t *testing.T) {
 	}
 
 	turnEnd := events[6]
-	// OpenCode counts reasoning apart from visible output; Output includes it.
+	// OpenCode 1.4.0 counts reasoning apart from visible output; Output includes it.
 	if u := turnEnd.Data.Usage; u == nil || u.Total != 2700 || u.Output != 700 || u.Reasoning != 200 {
 		t.Errorf("turn_end usage = %+v; want Output 700 including Reasoning 200", turnEnd.Data.Usage)
+	}
+
+	// Before 1.3.16 OpenCode's output already included reasoning.
+	if _, err := odb.DB().Exec(`UPDATE session SET version = '1.3.15' WHERE id = 'ses_parent'`); err != nil {
+		t.Fatalf("updating version: %v", err)
+	}
+	oldEvents, err := odb.ReconstructSessionEvents(ctx, "ses_parent")
+	if err != nil || len(oldEvents) != len(events) {
+		t.Fatalf("reconstructing 1.3.15 session: %d events, %v", len(oldEvents), err)
+	}
+	if u := oldEvents[6].Data.Usage; u == nil || u.Output != 500 || u.Reasoning != 200 {
+		t.Errorf("1.3.15 turn_end usage = %+v; want Output 500 including Reasoning 200", u)
+	}
+	oldSess, err := odb.GetSessionByID(ctx, "ses_parent")
+	if err != nil || oldSess.Tokens.Total != 3500 {
+		t.Errorf("1.3.15 session total = %+v, %v; want 3500 (reasoning inside output)", oldSess.Tokens, err)
+	}
+	if _, err := odb.DB().Exec(`UPDATE session SET version = '1.4.0' WHERE id = 'ses_parent'`); err != nil {
+		t.Fatalf("restoring version: %v", err)
 	}
 	if turnEnd.Data.RawHarnessCost == nil || *turnEnd.Data.RawHarnessCost != 0.045 {
 		t.Errorf("turn_end cost = %v", turnEnd.Data.RawHarnessCost)
@@ -2115,5 +2134,25 @@ func TestOpenOpencodeDBInMemory(t *testing.T) {
 	}
 	if one != 1 {
 		t.Fatalf("SELECT 1 = %d", one)
+	}
+}
+
+func TestOpencodeOutputIncludesReasoning(t *testing.T) {
+	for version, want := range map[string]bool{
+		"0.4.1":         true,
+		"1.2.27":        true,
+		"1.3.15":        true,
+		"v1.3.15":       true,
+		"1.3.16":        false,
+		"1.3.16-beta.1": false,
+		"1.4.0":         false,
+		"2.0.0":         false,
+		"":              false,
+		"dev":           false,
+		"1.x.0":         false,
+	} {
+		if got := opencodeOutputIncludesReasoning(version); got != want {
+			t.Errorf("opencodeOutputIncludesReasoning(%q) = %v, want %v", version, got, want)
+		}
 	}
 }

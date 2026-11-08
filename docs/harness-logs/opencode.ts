@@ -100,7 +100,7 @@ export interface IOpencodeSessionRow {
   readonly cost: number | null;
   /** Cumulative input tokens. */
   readonly tokens_input: number;
-  /** Cumulative output tokens. */
+  /** Cumulative output tokens; include reasoning before OpenCode 1.3.16, exclude it from then on. */
   readonly tokens_output: number;
   /** Cumulative reasoning tokens. */
   readonly tokens_reasoning: number;
@@ -126,7 +126,11 @@ export interface IOpencodeMessageTokenUsage {
   readonly total: number;
   /** Non-cached prompt / input tokens. */
   readonly input: number;
-  /** Visible output tokens, excluding reasoning (core `session/usage.ts`). */
+  /**
+   * Output tokens. From OpenCode 1.3.16 these exclude reasoning (getUsage stores
+   * `outputTokens - reasoningTokens`); earlier versions stored the provider's output
+   * tokens, which include reasoning. Parsers decide by the session's `version`.
+   */
   readonly output: number;
   /** Reasoning / thinking tokens, counted separately from `output`. */
   readonly reasoning?: number;

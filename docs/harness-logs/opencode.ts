@@ -129,7 +129,10 @@ export interface IOpencodeMessageTokenUsage {
   /**
    * Output tokens. From OpenCode 1.3.16 these exclude reasoning (getUsage stores
    * `outputTokens - reasoningTokens`); earlier versions stored the provider's output
-   * tokens, which include reasoning. Parsers decide by the session's `version`.
+   * tokens, which include reasoning. `total` is the provider's total, so
+   * `total == input + cache + output` marks the older format and
+   * `total == input + cache + output + reasoning` the newer one; otherwise parsers fall
+   * back to the session's `version`, which is the version that created the session.
    */
   readonly output: number;
   /** Reasoning / thinking tokens, counted separately from `output`. */

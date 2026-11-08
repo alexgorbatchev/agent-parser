@@ -742,7 +742,7 @@ func ReconstructSessionEvents(session *OpencodeSession, messages []OpencodeMessa
 			if msg.Data.Tokens != nil {
 				u := msg.Data.Tokens
 				output := u.Output
-				if !opencodeOutputIncludesReasoning(session.Version) {
+				if !opencodeMessageOutputIncludesReasoning(*u, session.Version) {
 					output += u.Reasoning
 				}
 				total := u.Total
@@ -1193,35 +1193,62 @@ func extractOpencodeError(v interface{}) string {
 	return res
 }
 
+// opencodeMessageOutputIncludesReasoning reports whether a message's
+// recorded output count already includes its reasoning tokens. OpenCode stores
+// the provider's total tokens, which count reasoning once inside the
+// provider's output: a total equal to input + cache + output means output
+// includes reasoning (before 1.3.16), and one that also adds reasoning means
+// it does not (1.3.16 on). When the total settles neither, the session's
+// version decides; a session resumed after an upgrade keeps the version that
+// created it, so the message's own numbers come first.
+func opencodeMessageOutputIncludesReasoning(u OpencodeTokens, sessionVersion string) bool {
+	if u.Reasoning > 0 {
+		base := u.Input + u.Output + u.Cache.Read + u.Cache.Write
+		switch u.Total {
+		case base:
+			return true
+		case base + u.Reasoning:
+			return false
+		}
+	}
+	return opencodeOutputIncludesReasoning(sessionVersion)
+}
+
 // opencodeOutputIncludesReasoning reports whether OpenCode's recorded output
-// count already includes reasoning tokens. Before 1.3.16 OpenCode stored the
-// provider's output tokens, which include reasoning; from 1.3.16 it stores
-// visible output only and counts reasoning separately (session getUsage:
-// output = outputTokens - reasoningTokens). An unknown version is treated as
-// current.
+// count includes reasoning tokens for a given OpenCode version. Before 1.3.16
+// OpenCode stored the provider's output tokens, which include reasoning; from
+// 1.3.16 it stores visible output only and counts reasoning separately
+// (session getUsage: output = outputTokens - reasoningTokens). A pre-release of
+// 1.3.16 sorts before it. An unknown version is treated as current.
 func opencodeOutputIncludesReasoning(version string) bool {
-	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	core, prerelease, _ := strings.Cut(strings.TrimPrefix(version, "v"), "-")
+	parts := strings.Split(core, ".")
 	if len(parts) != 3 {
 		return false
 	}
 	var nums [3]int
 	for i, part := range parts {
-		digits := part
-		if end := strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
-			digits = part[:end]
-		}
-		n, err := strconv.Atoi(digits)
+		n, err := strconv.Atoi(part)
 		if err != nil {
 			return false
 		}
 		nums[i] = n
 	}
-	return nums[0] < 1 || nums[0] == 1 && (nums[1] < 3 || nums[1] == 3 && nums[2] < 16)
+	switch {
+	case nums[0] != 1:
+		return nums[0] < 1
+	case nums[1] != 3:
+		return nums[1] < 3
+	case nums[2] != 16:
+		return nums[2] < 16
+	}
+	return prerelease != ""
 }
 
 // opencodeSessionTotal totals a session's token counts as the OpenCode
-// version that recorded them did: reasoning is part of output before 1.3.16
-// and counted on its own from then on.
+// version that created the session did: reasoning is part of output before
+// 1.3.16 and counted on its own from then on. A session row sums all its
+// messages, so a session resumed after an upgrade cannot be split here.
 func opencodeSessionTotal(version string, input, output, reasoning, cacheRead, cacheWrite int64) int64 {
 	total := input + output + cacheRead + cacheWrite
 	if !opencodeOutputIncludesReasoning(version) {

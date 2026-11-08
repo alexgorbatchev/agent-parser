@@ -2144,15 +2144,57 @@ func TestOpencodeOutputIncludesReasoning(t *testing.T) {
 		"1.3.15":        true,
 		"v1.3.15":       true,
 		"1.3.16":        false,
-		"1.3.16-beta.1": false,
+		"1.3.16-beta.1": true,
+		"1.3.17-beta.1": false,
 		"1.4.0":         false,
 		"2.0.0":         false,
 		"":              false,
 		"dev":           false,
 		"1.x.0":         false,
+		"1.3":           false,
 	} {
 		if got := opencodeOutputIncludesReasoning(version); got != want {
 			t.Errorf("opencodeOutputIncludesReasoning(%q) = %v, want %v", version, got, want)
 		}
+	}
+}
+
+func TestOpencodeMessageOutputReasoningFromTotals(t *testing.T) {
+	// A session created on 1.3.15 and resumed after upgrading to 1.4.0 holds
+	// messages in both formats; each message's totals tell them apart.
+	session := &OpencodeSession{ID: "ses_mixed", Directory: "/work", Version: "1.3.15"}
+	tokens := []OpencodeTokens{
+		// 1.3.15: output 50 includes reasoning 20; total = input + output.
+		{Total: 150, Input: 100, Output: 50, Reasoning: 20},
+		// 1.4.0: output 30 excludes reasoning 20; total adds reasoning.
+		{Total: 150, Input: 100, Output: 30, Reasoning: 20},
+		// Totals settle nothing: the 1.3.15 session version decides.
+		{Total: 999, Input: 100, Output: 50, Reasoning: 20},
+		// No total: the session version decides, and the total is computed.
+		{Input: 100, Output: 50, Reasoning: 20},
+	}
+	var messages []OpencodeMessage
+	for i := range tokens {
+		messages = append(messages, OpencodeMessage{
+			ID:          fmt.Sprintf("msg_%d", i),
+			SessionID:   "ses_mixed",
+			TimeCreated: int64(1700000000000 + i),
+			Data:        OpencodeMessageData{Role: "assistant", Tokens: &tokens[i]},
+		})
+	}
+	var got []string
+	for _, ev := range ReconstructSessionEvents(session, messages, nil) {
+		if ev.EventType == "turn_end" && ev.Data.Usage != nil {
+			got = append(got, fmt.Sprintf("out=%d reasoning=%d total=%d", ev.Data.Usage.Output, ev.Data.Usage.Reasoning, ev.Data.Usage.Total))
+		}
+	}
+	want := []string{
+		"out=50 reasoning=20 total=150",
+		"out=50 reasoning=20 total=150",
+		"out=50 reasoning=20 total=999",
+		"out=50 reasoning=20 total=150",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("usage = %q, want %q", got, want)
 	}
 }

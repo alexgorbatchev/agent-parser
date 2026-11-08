@@ -311,7 +311,17 @@ type rawCodexResponseItemPayload struct {
 	Input  json.RawMessage    `json:"input,omitempty"`
 	Output rawCodexToolOutput `json:"output"`
 	// Tools lists the tools a tool_search_output found.
-	Tools            json.RawMessage       `json:"tools"`
+	Tools json.RawMessage `json:"tools"`
+	// ID, Status, Action, RevisedPrompt and Result describe web search, local
+	// shell and image generation calls; Author and Recipient address an
+	// inter-agent message.
+	ID               string                `json:"id"`
+	Status           string                `json:"status"`
+	Action           json.RawMessage       `json:"action"`
+	RevisedPrompt    string                `json:"revised_prompt"`
+	Result           string                `json:"result"`
+	Author           string                `json:"author"`
+	Recipient        string                `json:"recipient"`
 	Content          interface{}           `json:"content"`
 	Summary          []rawCodexSummaryPart `json:"summary"`
 	EncryptedContent string                `json:"encrypted_content"`
@@ -425,6 +435,8 @@ func parseCodexLineWithState(line []byte, p *CodexParser) ([]ParsedEvent, error)
 		events, err = parseCodexTurnContext(raw.Payload, ts, p)
 	case "event_msg":
 		events, err = parseCodexEventMsg(raw.Payload, ts, p)
+	case "compacted":
+		events, err = parseCodexCompacted(raw.Payload, ts)
 	case "response_item":
 		events, err = parseCodexResponseItem(raw.Payload, ts, p)
 	}

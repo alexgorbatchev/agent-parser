@@ -2,10 +2,8 @@ package parser
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 )
@@ -193,14 +191,10 @@ func codexExtensionImages(item rawCodexToolItem) []Image {
 		return nil
 	}
 	var data string
-	if json.Unmarshal(item.Result, &data) != nil || data == "" {
+	if json.Unmarshal(item.Result, &data) != nil {
 		return nil
 	}
-	head, err := base64.StdEncoding.DecodeString(data[:min(len(data), 64)&^3])
-	if err != nil {
-		return nil
-	}
-	return []Image{{MediaType: http.DetectContentType(head), Data: data}}
+	return codexBase64Images(data)
 }
 
 // codexStatusFailed maps a completed item's status: "completed" succeeded,

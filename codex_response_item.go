@@ -21,6 +21,14 @@ func parseCodexResponseItem(payload json.RawMessage, ts int64, p *CodexParser) (
 		return codexMessageEvents(resp, ts, p), nil
 	case "reasoning":
 		return codexThinkingEvents(resp.Summary, ts), nil
+	case "web_search_call":
+		return codexWebSearchCallEvents(resp, ts, p), nil
+	case "local_shell_call":
+		return codexLocalShellCallEvents(resp, ts, p), nil
+	case "image_generation_call":
+		return codexImageGenerationCallEvents(resp, ts), nil
+	case "agent_message":
+		return codexInterAgentMessageEvents(resp, ts, p), nil
 	case "tool_search_call":
 		return []ParsedEvent{{
 			EventType: "tool_call",

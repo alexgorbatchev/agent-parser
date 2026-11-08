@@ -1033,6 +1033,51 @@ export interface ICodexToolSearchOutputPayload {
   readonly tools: readonly unknown[];
 }
 
+/** Web search the model ran (`ResponseItem::WebSearchCall`). */
+export interface ICodexWebSearchCallPayload {
+  readonly type: "web_search_call";
+  readonly id?: string;
+  readonly status?: string;
+  readonly action?: { readonly type: string; readonly [field: string]: unknown };
+}
+
+/** Local shell call (`ResponseItem::LocalShellCall`); its output is a function call output. */
+export interface ICodexLocalShellCallPayload {
+  readonly type: "local_shell_call";
+  readonly id?: string;
+  readonly call_id: string | null;
+  readonly status: "completed" | "in_progress" | "incomplete";
+  readonly action: {
+    readonly type: "exec";
+    readonly command: readonly string[];
+    readonly timeout_ms?: number | null;
+    readonly working_directory?: string | null;
+    readonly env?: Readonly<Record<string, string>> | null;
+    readonly user?: string | null;
+  };
+}
+
+/** Image the model generated (`ResponseItem::ImageGenerationCall`); `result` is base64. */
+export interface ICodexImageGenerationCallPayload {
+  readonly type: "image_generation_call";
+  readonly id?: string;
+  readonly status: string;
+  readonly revised_prompt?: string | null;
+  readonly result: string;
+}
+
+/**
+ * Message another agent sent to this rollout's agent (`ResponseItem::AgentMessage`): a
+ * new task, a message, or a subagent's final answer.
+ */
+export interface ICodexInterAgentMessagePayload {
+  readonly type: "agent_message";
+  readonly id?: string;
+  readonly author: string;
+  readonly recipient: string;
+  readonly content: readonly { readonly type: "input_text"; readonly text: string }[];
+}
+
 export type CodexResponseItemPayload =
   | ICodexRawMessagePayload
   | ICodexFunctionCallPayload
@@ -1041,7 +1086,26 @@ export type CodexResponseItemPayload =
   | ICodexCustomToolCallOutputPayload
   | ICodexResponseReasoningPayload
   | ICodexToolSearchCallPayload
-  | ICodexToolSearchOutputPayload;
+  | ICodexToolSearchOutputPayload
+  | ICodexWebSearchCallPayload
+  | ICodexLocalShellCallPayload
+  | ICodexImageGenerationCallPayload
+  | ICodexInterAgentMessagePayload;
+
+/**
+ * History compaction (`RolloutItem::Compacted`): Codex replaced the conversation with
+ * `replacement_history`, summarized by `message` (often empty).
+ */
+export interface ICodexCompactedRecord {
+  readonly type: "compacted";
+  readonly timestamp: string;
+  readonly ordinal?: number;
+  readonly payload: {
+    readonly message: string;
+    readonly replacement_history?: readonly unknown[];
+    readonly [field: string]: unknown;
+  };
+}
 
 export interface ICodexResponseItemRecord {
   readonly type: "response_item";

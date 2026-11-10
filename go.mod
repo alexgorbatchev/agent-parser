@@ -5,6 +5,7 @@ go 1.26.2
 require (
 	github.com/klauspost/compress v1.20.3
 	modernc.org/sqlite v1.61.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (

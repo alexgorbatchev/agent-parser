@@ -19,6 +19,13 @@ func TestSkillsFromShellCommand(t *testing.T) {
 		script string
 		want   []string
 	}{
+		{"brace group", "cat /x/skills/{programming,golang,programming}/SKILL.md", []string{"programming", "golang"}},
+		{"nested braces", "cat /x/skills/{programming,{golang,rust}}/SKILL.md", []string{"programming", "golang", "rust"}},
+		{"quoted braces", "cat '/x/skills/{go,rust}/SKILL.md'", []string{"{go,rust}"}},
+		{"quoted space", "cat '/some dir/skills/golang/SKILL.md'", []string{"golang"}},
+		{"dynamic command", "cat $(pwd)/skills/golang/SKILL.md", nil},
+		{"dynamic variable", "cat $ROOT/skills/golang/SKILL.md", nil},
+		{"invalid shell", "cat '/x/skills/golang/SKILL.md", nil},
 		{"cat one skill", "cat /home/dev/.agents/skills/git-commit/SKILL.md", []string{"git-commit"}},
 		{"cat several skills once each", "cat /a/skills/bun/SKILL.md /b/skills/typescript/SKILL.md /a/skills/bun/SKILL.md", []string{"bun", "typescript"}},
 		{"sed range read", "sed -n '1,200p' '/home/dev/.agents/skills/docs-writer/SKILL.md'", []string{"docs-writer"}},

@@ -4,6 +4,9 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Skill invocation sources.
@@ -68,7 +71,7 @@ func skillsFromShellCommand(script string) []SkillInvocation {
 	seen := map[string]bool{}
 	for _, command := range shellCommandSeparator.Split(script, -1) {
 		stages := strings.Split(command, "|")
-		fields := strings.Fields(stages[0])
+		fields := shellSkillFields(stages[0])
 		if len(fields) == 0 || !shellReadCommands[path.Base(trimShellQuotes(fields[0]))] {
 			continue
 		}
@@ -199,4 +202,38 @@ func claudeSkillDirFromMeta(text string) string {
 	}
 	line, _, _ := strings.Cut(text[len(claudeSkillBasePrefix):], "\n")
 	return strings.TrimSpace(line)
+}
+
+// shellSkillFields expands literal shell arguments without consulting the filesystem,
+// environment, or executing substitutions from recorded commands.
+func shellSkillFields(command string) []string {
+	var fields []string
+	for word, err := range syntax.NewParser().WordsSeq(strings.NewReader(command)) {
+		if err != nil {
+			return nil
+		}
+		dynamic := false
+		syntax.Walk(word, func(node syntax.Node) bool {
+			switch node.(type) {
+			case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp, *syntax.ProcSubst:
+				dynamic = true
+			}
+			return true
+		})
+		if dynamic {
+			return nil
+		}
+		syntax.SplitBraces(word)
+		for expanded, err := range expand.BracesSeq(nil, word) {
+			if err != nil {
+				return nil
+			}
+			value, err := expand.Literal(&expand.Config{Env: expand.ListEnviron()}, expanded)
+			if err != nil {
+				return nil
+			}
+			fields = append(fields, value)
+		}
+	}
+	return fields
 }

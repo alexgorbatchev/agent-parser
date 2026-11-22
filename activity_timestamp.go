@@ -90,7 +90,28 @@ func CodexActivityTimestamp(line []byte) (timestamp int64, found bool, err error
 	return 0, false, nil
 }
 
-// All three JSONL envelope schemas require a zoned timestamp string. Keep this
+// AgyActivityTimestamp returns the Unix-millisecond created_at time of a
+// conversational Antigravity (`agy`) transcript record (`USER_INPUT`,
+// `PLANNER_RESPONSE`, or `GENERIC`). System messages and unknown types return
+// found=false. Malformed JSON or an invalid timestamp on an activity record
+// returns an error. It never substitutes the current time.
+func AgyActivityTimestamp(line []byte) (timestamp int64, found bool, err error) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return 0, false, nil
+	}
+	var raw rawAgyTranscriptLine
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return 0, false, fmt.Errorf("decoding agy activity: %w", err)
+	}
+	switch raw.Type {
+	case "USER_INPUT", "PLANNER_RESPONSE", "GENERIC":
+		return activityEnvelopeTimestamp(raw.CreatedAt)
+	default:
+		return 0, false, nil
+	}
+}
+
+// All four JSONL envelope schemas require a zoned timestamp string. Keep this
 // strict reader separate from event parsing's historical current-time default.
 func activityEnvelopeTimestamp(value interface{}) (int64, bool, error) {
 	if value == nil || value == "" {

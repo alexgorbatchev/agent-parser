@@ -26,10 +26,10 @@ func NormalizeFileModification(toolName string, toolInput map[string]interface{}
 	filePath := extractFilePath(toolInput)
 
 	// Check write tools
-	isWriteTool := name == "write" || name == "filewrite" || name == "write_file" || name == "writefile"
+	isWriteTool := name == "write" || name == "filewrite" || name == "write_file" || name == "writefile" || name == "write_to_file"
 	hasEdits := hasEditKeys(toolInput)
 
-	contentStr, hasContent := toolInput["content"].(string)
+	contentStr, hasContent := extractPresentString(toolInput, "content", "Content", "CodeContent", "code_content")
 	if (isWriteTool || (filePath != "" && !hasEdits)) && hasContent {
 		if filePath == "" {
 			filePath = "untitled"
@@ -41,35 +41,37 @@ func NormalizeFileModification(toolName string, toolInput map[string]interface{}
 		}
 	}
 
-	// Check for edits array (Pi edits or Claude Code MultiEdit)
-	if editsRaw, ok := toolInput["edits"].([]interface{}); ok && len(editsRaw) > 0 {
-		var hunks []DiffHunk
-		for idx, editItem := range editsRaw {
-			if editMap, ok := editItem.(map[string]interface{}); ok {
-				oldStr := extractString(editMap, "oldText", "old_string", "old_str")
-				newStr := extractString(editMap, "newText", "new_string", "new_str")
-				var header string
-				if len(editsRaw) > 1 {
-					header = "Hunk " + strconv.Itoa(idx+1) + " of " + strconv.Itoa(len(editsRaw))
+	// Check for edits array (Pi edits, Claude Code MultiEdit, or Antigravity multi_replace_file_content)
+	for _, editsKey := range []string{"edits", "ReplacementChunks", "replacement_chunks"} {
+		if editsRaw, ok := toolInput[editsKey].([]interface{}); ok && len(editsRaw) > 0 {
+			var hunks []DiffHunk
+			for idx, editItem := range editsRaw {
+				if editMap, ok := editItem.(map[string]interface{}); ok {
+					oldStr := extractString(editMap, "oldText", "old_string", "old_str", "TargetContent", "target_content", "Target")
+					newStr := extractString(editMap, "newText", "new_string", "new_str", "ReplacementContent", "replacement_content", "Replacement")
+					var header string
+					if len(editsRaw) > 1 {
+						header = "Hunk " + strconv.Itoa(idx+1) + " of " + strconv.Itoa(len(editsRaw))
+					}
+					hunks = append(hunks, buildHunkFromStrings(oldStr, newStr, header))
 				}
-				hunks = append(hunks, buildHunkFromStrings(oldStr, newStr, header))
 			}
-		}
-		if len(hunks) > 0 {
-			if filePath == "" {
-				filePath = "untitled"
-			}
-			return &FileModification{
-				Action:   "EDIT",
-				FilePath: filePath,
-				Hunks:    hunks,
+			if len(hunks) > 0 {
+				if filePath == "" {
+					filePath = "untitled"
+				}
+				return &FileModification{
+					Action:   "EDIT",
+					FilePath: filePath,
+					Hunks:    hunks,
+				}
 			}
 		}
 	}
 
-	// Check for single old/new replacement (Claude Code Edit / str_replace_editor)
-	oldStr := extractString(toolInput, "old_string", "oldText", "old_str")
-	newStr := extractString(toolInput, "new_string", "newText", "new_str")
+	// Check for single old/new replacement (Claude Code Edit / str_replace_editor / Antigravity edit_file & replace_file_content)
+	oldStr := extractString(toolInput, "old_string", "oldText", "old_str", "Target", "TargetContent", "target_content")
+	newStr := extractString(toolInput, "new_string", "newText", "new_str", "Replacement", "ReplacementContent", "replacement_content")
 	if oldStr != "" || newStr != "" {
 		if filePath == "" {
 			filePath = "untitled"
@@ -85,7 +87,7 @@ func NormalizeFileModification(toolName string, toolInput map[string]interface{}
 }
 
 func extractFilePath(input map[string]interface{}) string {
-	keys := []string{"file_path", "path", "filePath", "file", "target"}
+	keys := []string{"file_path", "path", "filePath", "file", "target", "Path", "TargetFile", "target_file", "AbsolutePath", "absolute_path"}
 	for _, k := range keys {
 		if val, ok := input[k]; ok && val != nil {
 			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
@@ -97,15 +99,28 @@ func extractFilePath(input map[string]interface{}) string {
 }
 
 func hasEditKeys(input map[string]interface{}) bool {
-	if _, ok := input["edits"]; ok {
-		return true
+	for _, key := range []string{"edits", "ReplacementChunks", "replacement_chunks"} {
+		if _, ok := input[key]; ok {
+			return true
+		}
 	}
-	for _, k := range []string{"old_string", "oldText", "old_str", "new_string", "newText", "new_str", "patch", "diff"} {
+	for _, k := range []string{"old_string", "oldText", "old_str", "new_string", "newText", "new_str", "Target", "Replacement", "TargetContent", "target_content", "ReplacementContent", "replacement_content", "patch", "diff"} {
 		if s, ok := input[k].(string); ok && s != "" {
 			return true
 		}
 	}
 	return false
+}
+
+func extractPresentString(m map[string]interface{}, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if val, ok := m[k]; ok && val != nil {
+			if s, ok := val.(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
 
 func extractString(m map[string]interface{}, keys ...string) string {

@@ -9,8 +9,8 @@ status: current
 This directory contains the canonical TypeScript specifications, schemas, data structure descriptions, and parsing contracts for AI coding agent session logs and telemetry.
 
 > **CRITICAL ARCHITECTURAL CONTRACT**:
-> The TypeScript definitions in this directory (`claude-code.ts`, `pi.ts`, `codex.ts`, `opencode.ts`) serve as the **canonical type reference** and single source of truth for all harness log formats and cross-version permutations.
-> All Go types, unmarshaling structs, and parser implementations in this repository (`types.go` and the per-harness parser files such as `codex*.go`, `claudecode.go`, `pi.go`, and `opencode.go`) **MUST be kept strictly in sync** with these canonical specifications whenever schemas, aliases, or record variants are added or modified.
+> The TypeScript definitions in this directory (`claude-code.ts`, `pi.ts`, `codex.ts`, `opencode.ts`, `antigravity.ts`, `live.ts`) serve as the **canonical type reference** and single source of truth for all harness log formats and cross-version permutations.
+> All Go types, unmarshaling structs, and parser implementations in this repository (`types.go` and the per-harness parser files such as `codex*.go`, `claudecode.go`, `pi.go`, `opencode.go`, `agy.go`, and `live*.go`) **MUST be kept strictly in sync** with these canonical specifications whenever schemas, aliases, or record variants are added or modified.
 
 ## Supported Harnesses
 
@@ -20,6 +20,7 @@ This directory contains the canonical TypeScript specifications, schemas, data s
 | **Pi** (`@earendil-works/pi-coding-agent`)    | JSONL DAG tree (append + republish) | `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<id>.jsonl`                         | [`pi.ts`](./pi.ts)                   |
 | **OpenAI Codex CLI**                          | Date-partitioned JSONL rollouts     | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`                         | [`codex.ts`](./codex.ts)             |
 | **OpenCode** (`opencode`)                     | Global SQLite WAL Database          | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`                          | [`opencode.ts`](./opencode.ts)       |
+| **Google Antigravity** (`agy`)                | JSONL transcripts + SQLite stores   | `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`<br>`~/.gemini/antigravity-cli/conversation_summaries.db` | [`antigravity.ts`](./antigravity.ts) |
 
 ---
 

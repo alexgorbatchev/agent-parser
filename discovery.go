@@ -31,11 +31,12 @@ const (
 	HarnessCodex      Harness = "codex"
 	HarnessPi         Harness = "pi"
 	HarnessOpencode   Harness = "opencode"
+	HarnessAgy        Harness = "agy"
 )
 
 // SupportedHarnesses returns every supported harness in a stable order.
 func SupportedHarnesses() []Harness {
-	return []Harness{HarnessClaudeCode, HarnessCodex, HarnessPi, HarnessOpencode}
+	return []Harness{HarnessClaudeCode, HarnessCodex, HarnessPi, HarnessOpencode, HarnessAgy}
 }
 
 // SessionSource is one session stored on disk. Discovery reads directory entries, OpenCode's
@@ -130,6 +131,8 @@ func DiscoverSessions(ctx context.Context, opts DiscoverOptions) ([]SessionSourc
 			found, err = discoverPi(ctx, home)
 		case HarnessOpencode:
 			found, err = discoverOpencode(ctx, home)
+		case HarnessAgy:
+			found, err = discoverAgy(ctx, home)
 		default:
 			err = fmt.Errorf("unknown harness %q", harness)
 		}

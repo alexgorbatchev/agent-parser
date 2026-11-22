@@ -156,10 +156,12 @@ func skillsFromToolInput(inputKey string, input map[string]interface{}) []SkillI
 // skillsFromReadTool returns the skill a file-read tool call loads, if it reads a SKILL.md
 // from its first line. A read with an offset past line 1 continues an earlier load.
 func skillsFromReadTool(input map[string]interface{}) []SkillInvocation {
-	if offset, ok := input["offset"].(float64); ok && offset > 1 {
-		return nil
+	for _, offsetKey := range []string{"offset", "StartLine", "start_line"} {
+		if offset, ok := input[offsetKey].(float64); ok && offset > 1 {
+			return nil
+		}
 	}
-	for _, key := range []string{"path", "file_path"} {
+	for _, key := range []string{"path", "file_path", "Path", "AbsolutePath", "absolute_path", "TargetFile"} {
 		if skill, ok := skillFromFile(stringInput(input, key), SkillSourceModel); ok {
 			return []SkillInvocation{skill}
 		}

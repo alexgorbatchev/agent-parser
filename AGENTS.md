@@ -28,7 +28,8 @@ Pure Go streaming log parsers, database readers, and canonical specifications fo
 - **Always**: automatically record all new user instructions in `AGENTS.md` immediately upon receipt (check with user if existing instructions conflict).
 - **Always**: any time code is changed such that results from running that code are changed, a test file must be changed as well; 90% code coverage is required.
 - **Always**: run `just check` before committing changes.
-- **Never**: publish releases, tags, packages, or production deployments automatically without explicit user authorization.
+- **Always**: publish releases, tags, and packages when required to complete authorized work, after required validation and publication checks.
+- **Never**: deploy to production without explicit user authorization.
 - **Never**: perform external model catalog lookups or synthetic fullness calculations inside parser loops.
 - **Never**: add CGo dependencies.
 

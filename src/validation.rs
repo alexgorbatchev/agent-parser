@@ -26,6 +26,37 @@ fn fields(v: &Value, kind: Kind, keys: &[&str]) -> Result<(), Error> {
     }
     Ok(())
 }
+pub(crate) fn agy(v: &Value) -> Result<(), Error> {
+    fields(
+        v,
+        Kind::Text,
+        &[
+            "type", "source", "status", "content", "thinking", "error", "model",
+        ],
+    )?;
+    fields(
+        v,
+        Kind::Integer,
+        &[
+            "step_index",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "thinking_tokens",
+        ],
+    )?;
+    fields(v, Kind::Array, &["tool_calls", "truncated_fields"])?;
+    if let Some(calls) = v["tool_calls"].as_array() {
+        for call in calls {
+            if !call.is_object() {
+                return Err(Error::Invalid("tool call must be an object".into()));
+            }
+            fields(call, Kind::Text, &["id", "name"])?;
+            fields(call, Kind::Object, &["args"])?;
+        }
+    }
+    Ok(())
+}
 pub(crate) fn claude(v: &Value) -> Result<(), Error> {
     fields(
         v,

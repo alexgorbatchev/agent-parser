@@ -9,6 +9,10 @@ pub enum Error {
     Invalid(String),
     #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("invalid Antigravity trajectory metadata: {0}")]
+    Protobuf(#[from] prost::DecodeError),
 }
 pub(crate) fn record(line: &[u8]) -> Result<Value, Error> {
     let v: Value = serde_json::from_slice(line)?;

@@ -10,13 +10,31 @@ pub fn normalize_file_modification(
     input: Option<&Map<String, Value>>,
 ) -> Option<FileModification> {
     let v = Value::Object(input?.clone());
-    let path = first(&v, &["file_path", "path", "filePath", "file", "target"]).trim();
+    let path = first(
+        &v,
+        &[
+            "file_path",
+            "path",
+            "filePath",
+            "file",
+            "target",
+            "Path",
+            "TargetFile",
+            "target_file",
+            "AbsolutePath",
+            "absolute_path",
+        ],
+    )
+    .trim();
     let path = if path.is_empty() { "untitled" } else { path };
     let patch = first(&v, &["patch", "diff"]);
     if !patch.is_empty() {
         return parse_patch(patch, path);
     }
-    let has_edits = v.get("edits").is_some()
+    let edits = ["edits", "ReplacementChunks", "replacement_chunks"]
+        .iter()
+        .find_map(|key| v.get(*key));
+    let has_edits = edits.is_some()
         || !first(
             &v,
             &[
@@ -26,13 +44,21 @@ pub fn normalize_file_modification(
                 "new_string",
                 "newText",
                 "new_str",
+                "Target",
+                "TargetContent",
+                "target_content",
+                "Replacement",
+                "ReplacementContent",
+                "replacement_content",
             ],
         )
         .is_empty();
-    if let Some(content) = v["content"].as_str()
+    if let Some(content) = ["content", "Content", "CodeContent", "code_content"]
+        .iter()
+        .find_map(|key| v[*key].as_str())
         && (matches!(
             tool_name.trim().to_lowercase().as_str(),
-            "write" | "filewrite" | "write_file" | "writefile"
+            "write" | "filewrite" | "write_file" | "writefile" | "write_to_file"
         ) || (path != "untitled" && !has_edits))
     {
         return Some(FileModification {
@@ -43,11 +69,31 @@ pub fn normalize_file_modification(
         });
     }
     let mut hunks = vec![];
-    if let Some(edits) = v["edits"].as_array().filter(|a| !a.is_empty()) {
+    if let Some(edits) = edits.and_then(Value::as_array).filter(|a| !a.is_empty()) {
         for (i, e) in edits.iter().enumerate().filter(|(_, e)| e.is_object()) {
             hunks.push(build_hunk(
-                first(e, &["oldText", "old_string", "old_str"]),
-                first(e, &["newText", "new_string", "new_str"]),
+                first(
+                    e,
+                    &[
+                        "oldText",
+                        "old_string",
+                        "old_str",
+                        "TargetContent",
+                        "target_content",
+                        "Target",
+                    ],
+                ),
+                first(
+                    e,
+                    &[
+                        "newText",
+                        "new_string",
+                        "new_str",
+                        "ReplacementContent",
+                        "replacement_content",
+                        "Replacement",
+                    ],
+                ),
                 if edits.len() > 1 {
                     format!("Hunk {} of {}", i + 1, edits.len())
                 } else {
@@ -57,8 +103,28 @@ pub fn normalize_file_modification(
         }
     }
     if hunks.is_empty() {
-        let old = first(&v, &["old_string", "oldText", "old_str"]);
-        let new = first(&v, &["new_string", "newText", "new_str"]);
+        let old = first(
+            &v,
+            &[
+                "old_string",
+                "oldText",
+                "old_str",
+                "Target",
+                "TargetContent",
+                "target_content",
+            ],
+        );
+        let new = first(
+            &v,
+            &[
+                "new_string",
+                "newText",
+                "new_str",
+                "Replacement",
+                "ReplacementContent",
+                "replacement_content",
+            ],
+        );
         if old.is_empty() && new.is_empty() {
             return None;
         }

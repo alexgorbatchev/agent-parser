@@ -1,6 +1,8 @@
 #![doc = include_str!("../README.md")]
 mod models;
 pub use models::*;
+mod agy;
+mod agy_metadata;
 mod claude;
 mod codex;
 mod codex_response;
@@ -12,6 +14,10 @@ mod opencode_events;
 mod opencode_types;
 mod pi;
 mod validation;
+pub use agy::{AgyParser, parse_agy_line};
+pub use agy_metadata::{
+    AgyConversationSummary, read_agy_conversation_workspaces, read_agy_summaries,
+};
 pub use claude::{
     ClaudeCodeParser, clean_claude_code_prompt, extract_claude_code_title_from_prompt,
 };

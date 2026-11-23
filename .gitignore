@@ -1,4 +1,6 @@
 /target/
+/.state/
+/.worktrees/
 /.tmp/
 /.cache/
 /.codegraph/

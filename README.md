@@ -4,6 +4,8 @@
 
 - **Transcript parsing**: Converts individual JSONL records into normalized lifecycle, text, reasoning, tool, question, summary, usage, and error events.
 - **Streaming state**: Correlates Claude Code usage blocks and carries Codex model and rate-limit state between records.
+- **Headless output**: Normalizes live Claude Code, Codex, and Antigravity streams and retains the latest runner result.
+- **Session discovery**: Finds persisted transcripts and OpenCode sessions, including archives, forks, and subagents.
 - **File changes**: Normalizes single-file writes, string edits, multiple edits, and unified diff hunks.
 - **OpenCode snapshots**: Reads sessions, messages, parts, projects, and pending permissions from SQLite, and reconstructs chronological event timelines.
 - **Antigravity metadata**: Reads conversation summaries, parent links, and workspace paths from native SQLite stores and legacy JSON sidecars.
@@ -21,6 +23,8 @@
 - Codex retains the recorded model, context window, and active rate-limit reset between calls. The stateless `parse_codex_line` helper starts with empty state for each call. Context fullness is not synthesized.
 - Antigravity reads native `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC`, and `SYSTEM_MESSAGE` records from full or compact transcripts. Tool results match pending calls in recorded order; a new user turn clears pending calls. Token totals include input, output, and cache reads; reasoning remains separate. Token-total overflow returns an error without changing parser state.
 - Parsers require mutable access. Use separate instances for independent streams, and synchronize externally when sharing an instance between threads.
+- Skill events identify user and model invocations. Detection uses recorded tool inputs and parses literal shell arguments without executing transcript commands.
+- Session discovery reads harness-specific directories and OpenCode databases. It returns partial results alongside filesystem and decoding errors. Compressed transcripts stream through the same buffered interface as plain files.
 - Event timestamps are milliseconds since the Unix epoch. Missing envelope timestamps fall back to the current time; Claude Code first inherits its last recorded timestamp. Codex lifecycle timestamps recorded as integer seconds are converted to milliseconds.
 - OpenCode filesystem SQLite databases open read-only with a five-second busy timeout. Snapshot reads use one transaction; callers can interrupt running queries through `interrupt_handle()`. SQLite calls block. `:memory:` creates an isolated in-memory database; `new(connection)` keeps the supplied connection's access policy.
 - Antigravity metadata reads open existing SQLite files read-only with a 100 ms busy timeout. Summary reads use one transaction, support an absent parent-index table, and retain database errors. Workspace reads prefer a nonempty legacy JSON `cwd`, then decode the native trajectory protobuf, limited to 1 MiB. File URIs become platform paths with percent escapes decoded. These helpers read only the paths supplied by the caller; they do not discover sessions or launch the harness.
@@ -30,10 +34,10 @@
 
 # Installation
 
-From a sibling Rust project in this checkout:
+Run this from the consuming Rust project.
 
 ```sh
-cargo add agent-parser --path ../agent-parser
+cargo add agent-parser --git https://github.com/alexgorbatchev/agent-parser-rust
 ```
 
 # Quick Start
@@ -66,6 +70,16 @@ Output:
 
 `parse_codex_line(line: &[u8])` and `parse_agy_line(line: &[u8])` parse without retained state. `parse_pi_line(line: &[u8], fallback_cwd: &str)` parses a Pi record, using the supplied directory when the record omits it. Each returns `Result<Vec<ParsedEvent>, Error>`.
 
+`LiveParser::new(harness)` accepts `claude-code`, `codex`, or `agy` and returns a parser for headless output. Feed the parser one record at a time with `parse_line` and retrieve its latest normalized runner result with `result()`.
+
+`claude_code_activity_timestamp`, `codex_activity_timestamp`, `pi_activity_timestamp`, and `agy_activity_timestamp` extract native activity timestamps in Unix milliseconds when the record represents activity.
+
+### Discovery and transcript input
+
+`discover_sessions(&DiscoverOptions)` returns `Discovery` with session sources and errors. Supply a home directory and any harness filters. An empty filter includes every supported harness. `discover_sessions_until` also accepts a cancellation callback.
+
+`open_transcript(path)` returns a buffered reader for plain or Zstandard-compressed transcripts. Open SQLite session sources through `OpencodeDb`.
+
 ### Prompt and path helpers
 
 `clean_claude_code_prompt` and `clean_codex_prompt` remove recognized leading synthetic context blocks. `extract_claude_code_title_from_prompt`, `extract_codex_title_from_prompt`, and `extract_pi_title_from_prompt` return an optional first-line title of up to 100 Unicode characters.
@@ -90,7 +104,7 @@ Output:
 
 `read_agy_conversation_workspaces(conversations_directory, conversation_id)` returns `Vec<PathBuf>` from the legacy sidecar or trajectory database. The ID must be a single path component. Missing databases are errors and are never created.
 
-The [native Antigravity reference types](https://github.com/alexgorbatchev/agent-parser-rust/blob/main/docs/harness-logs/antigravity.ts) record transcript, database, protobuf, detached-subagent, and headless-output formats with their upstream provenance. `AgyParser` consumes persisted transcript records, not headless stream messages.
+The [native Antigravity reference types](https://github.com/alexgorbatchev/agent-parser-rust/blob/main/docs/harness-logs/antigravity.ts) record transcript, database, protobuf, detached-subagent, and headless-output formats with their upstream provenance. Use `AgyParser` for persisted transcripts and `LiveParser` for headless output.
 
 ### Events and errors
 

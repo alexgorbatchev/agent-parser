@@ -114,6 +114,11 @@ pub fn reconstruct_session_events(
                             tool_name: Some(p.tool.clone()),
                             tool_call_id: Some(p.call_id.clone()),
                             file_modification: normalize_file_modification(&p.tool, input.as_ref()),
+                            skills: if p.tool == "skill" {
+                                crate::skill::named_tool(input.as_ref(), "name")
+                            } else {
+                                vec![]
+                            },
                             tool_input: input,
                             content: state.and_then(|s| opt(&s.title)),
                             ..Default::default()

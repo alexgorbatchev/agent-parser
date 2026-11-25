@@ -144,6 +144,7 @@ impl AgyParser {
                     model: model.clone(),
                     tool_call_id: Some(id),
                     tool_name: Some(name.into()),
+                    skills: crate::skill::agy_tool(name, args.as_ref()),
                     tool_input: args,
                     file_modification: modification,
                     ..Default::default()

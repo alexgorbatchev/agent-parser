@@ -31,6 +31,7 @@ pub struct ClaudeCodeParser {
     last_timestamp: i64,
     requests: HashSet<String>,
     request_order: VecDeque<String>,
+    pending_commands: HashMap<String, String>,
 }
 impl ClaudeCodeParser {
     pub fn new() -> Self {
@@ -131,7 +132,7 @@ impl ClaudeCodeParser {
                     self.titles.insert(key.into(), title);
                 }
             }
-            "user" => self.parse_user(msg, key, sub, &mut emit),
+            "user" => self.parse_user(&raw, key, sub, &mut emit),
             "assistant" => self.parse_assistant(&raw, key, &mut emit),
             _ => {}
         }
@@ -183,11 +184,12 @@ impl ClaudeCodeParser {
     }
     fn parse_user(
         &mut self,
-        msg: &serde_json::Value,
+        raw: &serde_json::Value,
         key: &str,
         sub: bool,
         emit: &mut impl FnMut(&str, EventData),
     ) {
+        let msg = &raw["message"];
         if msg.is_object() {
             let mut texts = vec![];
             let mut has_result = false;
@@ -221,6 +223,21 @@ impl ClaudeCodeParser {
             }
             if !texts.is_empty() && !has_result {
                 let prompt = texts.join("\n");
+                let skills =
+                    crate::skill::claude_prompt(raw, key, &prompt, &mut self.pending_commands);
+                if raw["isMeta"].as_bool() == Some(true) {
+                    if !skills.is_empty() {
+                        emit(
+                            "skill_invoked",
+                            EventData {
+                                role: Some("user".into()),
+                                skills,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    return;
+                }
                 let title = if !sub
                     && !self.explicit_titles.contains(key)
                     && !self.titles.contains_key(key)
@@ -305,6 +322,11 @@ impl ClaudeCodeParser {
                                     name,
                                     params.as_ref(),
                                 ),
+                                skills: if name == "Skill" {
+                                    crate::skill::named_tool(params.as_ref(), "skill")
+                                } else {
+                                    vec![]
+                                },
                                 tool_input: params,
                                 question: q,
                                 ..Default::default()

@@ -122,6 +122,9 @@ impl CodexParser {
         match s(p, "type") {
             "item_completed" => {
                 let item = &p["item"];
+                if let Some(skills) = crate::skill::codex_item(item)? {
+                    events.push(event("skill_invoked", ts, "", "", skills));
+                }
                 if s(item, "type") == "AgentMessage" {
                     let text = item["content"]
                         .as_array()

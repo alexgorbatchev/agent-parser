@@ -41,6 +41,14 @@ pub struct TokenUsage {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct EventData {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::SkillInvocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<crate::LiveResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

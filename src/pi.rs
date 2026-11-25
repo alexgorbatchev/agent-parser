@@ -70,6 +70,7 @@ pub fn parse_pi_line(line: &[u8], fallback_cwd: &str) -> Result<Vec<ParsedEvent>
                             content: Some(prompt.clone()),
                             last_prompt: Some(prompt.clone()),
                             title: title(&prompt),
+                            skills: crate::skill::pi_prompt(&prompt),
                             ..Default::default()
                         },
                     )
@@ -145,6 +146,11 @@ pub fn parse_pi_line(line: &[u8], fallback_cwd: &str) -> Result<Vec<ParsedEvent>
                                             name,
                                             params.as_ref(),
                                         ),
+                                        skills: if name == "read" {
+                                            crate::skill::read_tool(params.as_ref())
+                                        } else {
+                                            vec![]
+                                        },
                                         tool_input: params,
                                         question: q,
                                         ..Default::default()

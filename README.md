@@ -1,6 +1,6 @@
 `agent-parser` turns Claude Code, Pi, Codex, Antigravity (`agy`), and OpenCode transcripts into typed Rust events for session viewers, observers, and usage analysis.
 
-The Go implementation is deprecated. Its source is available on the [`go-legacy` branch](https://github.com/alexgorbatchev/agent-parser/tree/go-legacy) and from existing Go release tags. [`go-upstream.json`](go-upstream.json) records the Go revision covered by the Rust port. The [canonical harness schemas](docs/harness-logs) describe the native formats.
+The [canonical harness schemas](docs/harness-logs) describe the native formats.
 
 # What It Does
 

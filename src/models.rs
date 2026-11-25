@@ -40,9 +40,24 @@ pub struct TokenUsage {
     pub reasoning: i64,
     pub total: i64,
 }
+/// Inline image data or a reference recorded by a harness.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Image {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub media_type: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub data: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub file_id: String,
+}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct EventData {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_uuid: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

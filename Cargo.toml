@@ -6,6 +6,7 @@ license = "MIT"
 description = "Streaming parsers and read-only SQLite readers for coding-agent transcripts"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 regex = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }

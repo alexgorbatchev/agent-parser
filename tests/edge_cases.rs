@@ -105,14 +105,15 @@ fn claude_fifo_retains_recent_requests_and_inherits_timestamps() {
 #[test]
 fn codex_completed_agent_items_and_async_questions() {
     let mut parser = CodexParser::new();
+    parser
+        .parse_line(br#"{"type":"session_meta","payload":{"history_mode":"paginated"}}"#)
+        .unwrap();
     let events = codex(
         &mut parser,
         1000,
         json!({"type":"item_completed","item":{"type":"AgentMessage","id":"id","content":[{"type":"Text","text":"Choose"}],"questions":[{"question":"Which?"},{"questions":[{"prompt":"Why?"}]}]}}),
     );
-    assert_eq!(events[0].event_type, "question_prompt");
-    assert_eq!(events[0].data.question.as_deref(), Some("Which?\nWhy?"));
-    assert_eq!(events[0].data.tool_call_id.as_deref(), Some("id"));
+    assert!(events.is_empty());
     for item in [
         json!({"type":"AgentMessage","content":[]}),
         json!({"type":"Other"}),

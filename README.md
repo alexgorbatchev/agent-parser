@@ -1,5 +1,7 @@
 `agent-parser` turns Claude Code, Pi, Codex, Antigravity (`agy`), and OpenCode transcripts into typed Rust events for session viewers, observers, and usage analysis.
 
+The upstream Go revision is recorded in [`go-upstream.json`](go-upstream.json). The [canonical harness schemas](https://github.com/alexgorbatchev/agent-parser/tree/ca498134ba23edac85650ca515adc63ba1e8cc15/docs/harness-logs) describe the native formats at that revision.
+
 # What It Does
 
 - **Transcript parsing**: Converts individual JSONL records into normalized lifecycle, text, reasoning, tool, question, summary, usage, and error events.
@@ -21,6 +23,9 @@
 - JSONL parsing is synchronous and operates on the bytes supplied by the caller. It reads no files, environment variables, credentials, network services, or model catalogs.
 - Claude Code deduplicates usage by session and request/message identity. Its bounded FIFO remembers up to 200 identities and evicts the oldest 100 at capacity. Text and tool events retain their source semantics. `reset()` clears correlation state.
 - Codex retains the recorded model, context window, active rate-limit reset, and turn state between calls. It pairs the first prompt with the turn start and emits subsequent prompts as `message_absorbed`. Stateful parsing skips inherited records when a subagent supplies its first ordinal.
+- Codex emits per-response token counts as `usage` and closes turns with `task_complete` or `turn_aborted`. The stateful parser suppresses repeated cumulative counts, tracks quota refreshes, and pairs paginated history items with their recorded prompts and tool results.
+- `TokenUsage.reasoning` is the part of output spent on reasoning. Computed totals count it once. Claude Code reads this count from `output_tokens_details` when present.
+- Image-bearing messages and tool results can include `EventData.images` with inline data, a URL, or a harness file ID.
 - Antigravity reads native `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC`, and `SYSTEM_MESSAGE` records from full or compact transcripts. Tool results match pending calls in recorded order; a new user turn clears pending calls. Token totals include input, output, and cache reads; reasoning remains separate. Token-total overflow returns an error without changing parser state.
 - Parsers require mutable access. Use separate instances for independent streams, and synchronize externally when sharing an instance between threads.
 - Skill events identify user and model invocations. Detection uses recorded tool inputs and parses literal shell arguments without executing transcript commands.
@@ -110,7 +115,7 @@ The [native Antigravity reference types](https://github.com/alexgorbatchev/agent
 
 ### Events and errors
 
-`ParsedEvent`, `EventData`, `TokenUsage`, `FileModification`, `DiffHunk`, `DiffLine`, and the `Opencode*` payload and row types support serialization and deserialization. JSON field names retain the transcript consumer contract, including camelCase event fields and optional omitted values.
+`ParsedEvent`, `EventData`, `TokenUsage`, `Image`, `FileModification`, `DiffHunk`, `DiffLine`, and the `Opencode*` payload and row types support serialization and deserialization. JSON field names retain the transcript consumer contract, including camelCase event fields and optional omitted values.
 
 `Error::Json` retains malformed JSON details, `Error::Invalid` reports invalid record structure, timestamps, identifiers, or overflowing token totals, and `Error::Sqlite` retains native database failures. `Error::Io` retains sidecar read failures; `Error::Protobuf` retains trajectory decoding failures. Missing sessions return a SQLite query error.
 

@@ -1,7 +1,9 @@
+use crate::codex_limits::{error_rate_limit, quota_available, rate_reset, seconds_until};
 use crate::codex_response::parse_response_item;
 use crate::common::*;
-use crate::{Error, EventData, ParsedEvent, TokenUsage};
+use crate::{Error, EventData, Image, ParsedEvent, TokenUsage};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 pub fn clean_codex_prompt(prompt: &str) -> String {
     clean_prompt(prompt, &["environment_context", "session_context"])
 }
@@ -19,6 +21,9 @@ pub struct CodexParser {
     turn_open: bool,
     pending_turn_start: Option<ParsedEvent>,
     held_turn_events: Vec<ParsedEvent>,
+    adjacent_user_images: Option<Vec<Image>>,
+    recorded_calls: HashMap<String, Option<bool>>,
+    last_total_usage: Option<TokenUsage>,
 }
 pub fn parse_codex_line(line: &[u8]) -> Result<Vec<ParsedEvent>, Error> {
     CodexParser::default().parse_line_inner(line, false)
@@ -38,6 +43,7 @@ impl CodexParser {
             return Ok(vec![]);
         }
         let raw = record(line)?;
+        let adjacent_images = self.adjacent_user_images.take();
         if matches!((self.history_start_ordinal, raw["ordinal"].as_u64()), (Some(start), Some(at)) if at < start)
         {
             return Ok(vec![]);
@@ -76,14 +82,16 @@ impl CodexParser {
                 } else {
                     s(spawn, "agent_nickname")
                 };
-                let mut role = if s(spawn, "agent_role").is_empty() {
-                    s(p, "agent_role")
-                } else {
-                    s(spawn, "agent_role")
-                };
-                if role.is_empty() {
-                    role = p["source"]["subagent"].as_str().unwrap_or("")
-                }
+                let subagent = &p["source"]["subagent"];
+                let role = [
+                    first(spawn, &["agent_role", "agent_type"]),
+                    first(p, &["agent_role", "agent_type"]),
+                    subagent.as_str().unwrap_or(""),
+                    s(subagent, "other"),
+                ]
+                .into_iter()
+                .find(|role| !role.is_empty())
+                .unwrap_or("");
                 let id = first(p, &["id", "session_id"]);
                 let title = if !nick.is_empty() && !role.is_empty() {
                     format!("Codex Subagent: {nick} ({role})")
@@ -98,10 +106,6 @@ impl CodexParser {
                 } else {
                     "Codex Session".into()
                 };
-                let model = opt(first(p, &["model", "model_provider"]));
-                if let Some(m) = &model {
-                    self.current_model = m.clone()
-                }
                 events.push(event(
                     "run_started",
                     ts,
@@ -109,28 +113,13 @@ impl CodexParser {
                     s(&p["git"], "branch"),
                     EventData {
                         title: Some(title),
-                        model,
                         ..Default::default()
                     },
                 ))
             }
-            "turn_context" => {
-                if let Some(model) = opt(s(p, "model")) {
-                    self.current_model = model.clone();
-                    events.push(event(
-                        "model_change",
-                        ts,
-                        s(p, "cwd"),
-                        "",
-                        EventData {
-                            model: Some(model),
-                            ..Default::default()
-                        },
-                    ))
-                }
-            }
+            "turn_context" => events.extend(self.model_change(p, ts)),
             "event_msg" => {
-                events = self.parse_event_message(p, ts, stateful)?;
+                events = self.parse_event_message(p, ts, stateful, adjacent_images)?;
                 if s(p, "type") == "task_started" && stateful {
                     let previous = self.release_turn_start();
                     self.turn_open = true;
@@ -139,10 +128,36 @@ impl CodexParser {
                 }
             }
             "response_item" => {
-                let prompt = s(p, "type") == "message" && s(p, "role") == "user";
-                if !prompt || !(self.paginated || crate::codex_context::is_context(&p["content"])) {
-                    events = parse_response_item(p, ts)?;
+                let kind = s(p, "type");
+                if kind == "message" && s(p, "role") == "user" {
+                    if crate::codex_context::is_context(&p["content"]) {
+                        return Ok(events);
+                    }
+                    if self.paginated {
+                        self.adjacent_user_images =
+                            Some(crate::images::codex(&p["content"], "input_image"));
+                        return Ok(events);
+                    }
+                } else if self.paginated
+                    && (kind == "web_search_call"
+                        || (kind == "message" && s(p, "role") == "assistant"))
+                {
+                    return Ok(events);
                 }
+                let call_id = s(p, "call_id");
+                let mut outcome = None;
+                if self.paginated && !call_id.is_empty() {
+                    match kind {
+                        "function_call" | "custom_tool_call" | "local_shell_call" => {
+                            self.recorded_calls.insert(call_id.into(), None);
+                        }
+                        "function_call_output" | "custom_tool_call_output" => {
+                            outcome = self.recorded_calls.get_mut(call_id).and_then(Option::take);
+                        }
+                        _ => {}
+                    }
+                }
+                events = parse_response_item(p, ts, outcome)?;
             }
             "compacted" => {
                 let compacted: Compacted = serde_json::from_value(p.clone())?;
@@ -160,7 +175,8 @@ impl CodexParser {
             _ => {}
         }
         if let Some(index) = events.iter().position(|event| {
-            event.event_type == "turn_start" && event.data.role.as_deref() == Some("user")
+            event.event_type == "turn_start"
+                && matches!(event.data.role.as_deref(), Some("user" | "agent"))
         }) && self.turn_open
         {
             if let Some(start) = &mut self.pending_turn_start {
@@ -199,12 +215,23 @@ impl CodexParser {
         p: &Value,
         ts: i64,
         stateful: bool,
+        adjacent_images: Option<Vec<Image>>,
     ) -> Result<Vec<ParsedEvent>, Error> {
         let mut events = vec![];
         match s(p, "type") {
             "item_completed" => {
                 let item = &p["item"];
-                if matches!(s(item, "type"), "FileChange" | "file_change") {
+                let kind = s(item, "type");
+                let file = matches!(kind, "FileChange" | "file_change");
+                if self.paginated && (file || crate::codex_tool::is_tool_item(kind)) {
+                    if let Some(outcome) = self.recorded_calls.get_mut(s(item, "id")) {
+                        *outcome = crate::codex_tool::item_failed(item);
+                    } else if !file {
+                        events =
+                            crate::codex_tool::item_events(item, p["started_at_ms"].as_i64(), ts);
+                    }
+                }
+                if file {
                     return crate::codex_file_change::events(item, ts);
                 }
                 if let Some(skills) = crate::skill::codex_item(item)? {
@@ -218,11 +245,16 @@ impl CodexParser {
                         .filter(|part| s(part, "type") == "text")
                         .map(|part| s(part, "text"))
                         .collect();
-                    if let Some(prompt) = user_data(&text) {
+                    let images = adjacent_images
+                        .unwrap_or_else(|| crate::images::codex(&item["content"], "image"));
+                    if let Some(prompt) = user_data(&text, images) {
                         events.insert(0, event("turn_start", ts, "", "", prompt));
                     }
                 }
-                if s(item, "type") == "AgentMessage" {
+                if kind == "AgentMessage"
+                    && self.paginated
+                    && item["questions"].as_array().is_none_or(Vec::is_empty)
+                {
                     let text = item["content"]
                         .as_array()
                         .map(|a| {
@@ -232,33 +264,15 @@ impl CodexParser {
                                 .collect::<String>()
                         })
                         .unwrap_or_default();
-                    let questions = item["questions"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .map(|q| question(q, true))
-                                .filter(|s| !s.is_empty())
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default();
-                    if !text.trim().is_empty() || !questions.is_empty() {
+                    if !text.is_empty() {
                         events.push(event(
-                            if questions.is_empty() {
-                                "agent_message"
-                            } else {
-                                "question_prompt"
-                            },
+                            "agent_message",
                             ts,
                             "",
                             "",
                             EventData {
                                 role: Some("assistant".into()),
                                 content: Some(text),
-                                question: opt(&questions),
-                                tool_call_id: (!questions.is_empty())
-                                    .then(|| opt(s(item, "id")))
-                                    .flatten(),
                                 ..Default::default()
                             },
                         ))
@@ -266,95 +280,14 @@ impl CodexParser {
                 }
             }
             "patch_apply_end" => return crate::codex_file_change::events(p, ts),
-            "user_message" if !stateful => {
-                if let Some(data) = user_data(s(p, "message")) {
-                    events.push(event("turn_start", ts, "", "", data))
-                }
-            }
-            "agent_message" if !stateful => {
-                if !s(p, "message").is_empty() {
-                    events.push(event(
-                        "agent_message",
-                        ts,
-                        "",
-                        "",
-                        EventData {
-                            role: Some("assistant".into()),
-                            content: Some(s(p, "message").into()),
-                            ..Default::default()
-                        },
-                    ))
-                }
-            }
             "reasoning" => {
                 if let Some(data) = reasoning(p) {
                     events.push(event("thinking", ts, "", "", data))
                 }
             }
-            "token_count" => {
-                let info = &p["info"];
-                if info.is_object() {
-                    let last = &info["last_token_usage"];
-                    let chosen = if n(last, "total_tokens") == 0
-                        && n(last, "prompt_tokens") == 0
-                        && n(last, "completion_tokens") == 0
-                    {
-                        &info["total_token_usage"]
-                    } else {
-                        last
-                    };
-                    let total = if n(chosen, "total_tokens") == 0 {
-                        n(chosen, "prompt_tokens") + n(chosen, "completion_tokens")
-                    } else {
-                        n(chosen, "total_tokens")
-                    };
-                    let usage = TokenUsage {
-                        input: (n(chosen, "prompt_tokens") - n(chosen, "cached_prompt_tokens"))
-                            .max(0),
-                        output: n(chosen, "completion_tokens"),
-                        cache_read: n(chosen, "cached_prompt_tokens"),
-                        reasoning: n(chosen, "reasoning_tokens"),
-                        total,
-                        ..Default::default()
-                    };
-                    let cw = if n(info, "model_context_window") == 0 {
-                        self.context_window
-                    } else {
-                        n(info, "model_context_window")
-                    };
-                    if cw > 0 {
-                        self.context_window = cw
-                    }
-                    let rates = &p["rate_limits"];
-                    let reset = rate_reset(rates, ts, false).filter(|(at, _)| *at > ts);
-                    if let Some((at, _)) = reset {
-                        self.rate_limit_reset_at = Some(at)
-                    } else if rates.is_object()
-                        && (rates["remaining_tokens"].is_null() || n(rates, "remaining_tokens") > 0)
-                        && (rates["remaining_requests"].is_null()
-                            || n(rates, "remaining_requests") > 0)
-                        && (!rates["remaining_tokens"].is_null()
-                            || !rates["remaining_requests"].is_null())
-                    {
-                        self.rate_limit_reset_at = None
-                    }
-                    self.expire(ts);
-                    events.push(event(
-                        "turn_end",
-                        ts,
-                        "",
-                        "",
-                        EventData {
-                            role: Some("assistant".into()),
-                            model: opt(&self.current_model),
-                            model_context_window: (cw > 0).then_some(cw),
-                            usage: Some(usage),
-                            rate_limit_reset_at: reset.map(|(at, _)| at),
-                            retry_after_seconds: reset.map(|(_, sec)| sec),
-                            ..Default::default()
-                        },
-                    ))
-                }
+            "token_count" => events.extend(self.usage(p, ts, stateful)),
+            "thread_settings_applied" => {
+                events.extend(self.model_change(&p["thread_settings"], ts))
             }
             "task_started" | "task_complete" | "turn_aborted" => {
                 let complete = s(p, "type") != "task_started";
@@ -366,6 +299,10 @@ impl CodexParser {
                 let ts = task_timestamp(&p[field], ts)?;
                 if complete {
                     self.turn_open = false;
+                    self.recorded_calls.clear();
+                    if p["error"].is_object() {
+                        events.push(self.error(&p["error"], ts));
+                    }
                 }
                 events.push(event(
                     if complete { "turn_end" } else { "turn_start" },
@@ -374,65 +311,142 @@ impl CodexParser {
                     "",
                     EventData {
                         role: Some("assistant".into()),
-                        content: complete.then(|| opt(s(p, "last_agent_message"))).flatten(),
-                        stop_reason: opt(s(p, "reason")),
+                        content: if s(p, "type") == "task_complete" {
+                            opt(s(p, "last_agent_message"))
+                        } else {
+                            None
+                        },
+                        stop_reason: if s(p, "type") == "turn_aborted" {
+                            opt(s(p, "reason"))
+                        } else {
+                            None
+                        },
                         ..Default::default()
                     },
                 ))
             }
-            "error" => {
-                let mut is_rl = error_rate_limit(&p["codex_error_info"]);
-                let line_reset = rate_reset(&p["rate_limits"], ts, true).filter(|(at, _)| *at > ts);
-                if let Some((at, _)) = line_reset {
-                    self.rate_limit_reset_at = Some(at)
-                }
-                self.expire(ts);
-                let reset = match is_rl {
-                    Some(false) => None,
-                    Some(true) => line_reset.or_else(|| {
-                        self.rate_limit_reset_at
-                            .map(|at| (at, at.saturating_sub(ts).saturating_add(999) / 1000))
-                    }),
-                    None => {
-                        if line_reset.is_some() {
-                            is_rl = Some(true)
-                        }
-                        line_reset
-                    }
-                };
-                events.push(event(
-                    "error",
-                    ts,
-                    "",
-                    "",
-                    EventData {
-                        role: Some("assistant".into()),
-                        content: Some(s(p, "message").into()),
-                        is_error: Some(true),
-                        is_rate_limit: is_rl,
-                        rate_limit_reset_at: reset.map(|(at, _)| at),
-                        retry_after_seconds: reset.map(|(_, sec)| sec),
-                        ..Default::default()
-                    },
-                ))
-            }
+            "error" => events.push(self.error(p, ts)),
             _ => {}
         };
         Ok(events)
     }
-    fn expire(&mut self, ts: i64) {
-        if self.rate_limit_reset_at.is_some_and(|at| at <= ts) {
-            self.rate_limit_reset_at = None
+    fn model_change(&mut self, p: &Value, ts: i64) -> Option<ParsedEvent> {
+        let model = opt(s(p, "model"))?;
+        self.current_model = model.clone();
+        Some(event(
+            "model_change",
+            ts,
+            s(p, "cwd"),
+            "",
+            EventData {
+                model: Some(model),
+                ..Default::default()
+            },
+        ))
+    }
+    fn usage(&mut self, p: &Value, ts: i64, stateful: bool) -> Option<ParsedEvent> {
+        let limits = &p["rate_limits"];
+        let reset = rate_reset(limits, ts, false);
+        if let Some((at, _)) = reset {
+            self.rate_limit_reset_at = Some(at);
+        } else if quota_available(limits) || self.rate_limit_reset_at.is_some_and(|at| at <= ts) {
+            self.rate_limit_reset_at = None;
         }
+        let info = p.get("info").filter(|info| info.is_object())?;
+        if stateful && info["total_token_usage"].is_object() {
+            let total = token_usage(&info["total_token_usage"]);
+            if self.last_total_usage.replace(total.clone()).as_ref() == Some(&total) {
+                return None;
+            }
+        }
+        let mut usage = token_usage(&info["last_token_usage"]);
+        if usage.input == 0 && usage.output == 0 {
+            return None;
+        }
+        if usage.total == 0 {
+            usage.total = usage.input.saturating_add(usage.output);
+        }
+        usage.input = usage
+            .input
+            .saturating_sub(usage.cache_read)
+            .saturating_sub(usage.cache_write)
+            .max(0);
+        let reported_window = n(info, "model_context_window");
+        let window = if reported_window == 0 {
+            self.context_window
+        } else {
+            reported_window
+        };
+        if window > 0 {
+            self.context_window = window;
+        }
+        Some(event(
+            "usage",
+            ts,
+            "",
+            "",
+            EventData {
+                role: Some("assistant".into()),
+                model: opt(&self.current_model),
+                model_context_window: (window > 0).then_some(window),
+                usage: Some(usage),
+                rate_limit_reset_at: reset.map(|(at, _)| at),
+                retry_after_seconds: reset.map(|(_, sec)| sec),
+                ..Default::default()
+            },
+        ))
+    }
+    fn error(&mut self, p: &Value, ts: i64) -> ParsedEvent {
+        let classification = error_rate_limit(&p["codex_error_info"]);
+        let line_reset = rate_reset(&p["rate_limits"], ts, true);
+        if let Some((at, _)) = line_reset {
+            self.rate_limit_reset_at = Some(at);
+        } else if self.rate_limit_reset_at.is_some_and(|at| at <= ts) {
+            self.rate_limit_reset_at = None;
+        }
+        let reset = match classification {
+            Some(false) => None,
+            Some(true) => line_reset.or_else(|| {
+                self.rate_limit_reset_at
+                    .map(|at| (at, seconds_until(at, ts)))
+            }),
+            None => line_reset,
+        };
+        event(
+            "error",
+            ts,
+            "",
+            "",
+            EventData {
+                role: Some("assistant".into()),
+                content: Some(s(p, "message").into()),
+                is_error: Some(true),
+                is_rate_limit: classification.or_else(|| line_reset.map(|_| true)),
+                rate_limit_reset_at: reset.map(|(at, _)| at),
+                retry_after_seconds: reset.map(|(_, sec)| sec),
+                ..Default::default()
+            },
+        )
+    }
+}
+fn token_usage(value: &Value) -> TokenUsage {
+    let field = |native, legacy| integer(&value[native]).unwrap_or_else(|| n(value, legacy));
+    TokenUsage {
+        input: field("input_tokens", "prompt_tokens"),
+        output: field("output_tokens", "completion_tokens"),
+        cache_read: field("cached_input_tokens", "cached_prompt_tokens"),
+        cache_write: n(value, "cache_write_input_tokens"),
+        reasoning: field("reasoning_output_tokens", "reasoning_tokens"),
+        total: n(value, "total_tokens"),
     }
 }
 #[derive(serde::Deserialize)]
 struct Compacted {
     message: Option<String>,
 }
-pub(crate) fn user_data(prompt: &str) -> Option<EventData> {
+pub(crate) fn user_data(prompt: &str, images: Vec<Image>) -> Option<EventData> {
     let prompt = clean_codex_prompt(prompt);
-    if prompt.is_empty() {
+    if prompt.is_empty() && images.is_empty() {
         return None;
     }
     Some(EventData {
@@ -440,6 +454,7 @@ pub(crate) fn user_data(prompt: &str) -> Option<EventData> {
         content: Some(prompt.clone()),
         last_prompt: Some(prompt.clone()),
         title: title(&prompt),
+        images,
         ..Default::default()
     })
 }
@@ -483,62 +498,4 @@ pub(crate) fn parse_input(v: &Value) -> Option<Map<String, Value>> {
         Ok(Value::Null) => None,
         _ => json!({"raw":text}).as_object().cloned(),
     }
-}
-fn error_rate_limit(v: &Value) -> Option<bool> {
-    fn class(s: &str) -> Option<bool> {
-        match s {
-            "RateLimitExceeded" | "rate_limit_exceeded" => Some(true),
-            "UsageLimitExceeded"
-            | "usage_limit_exceeded"
-            | "ServerOverloaded"
-            | "server_overloaded" => Some(false),
-            _ => None,
-        }
-    }
-    if let Some(text) = v.as_str() {
-        return class(text);
-    }
-    let m = v.as_object()?;
-    let status = integer(&v["http_status_code"])
-        .or_else(|| integer(&v["HttpConnectionFailed"]["http_status_code"]))
-        .or_else(|| integer(&v["http_connection_failed"]["http_status_code"]));
-    if let Some(status) = status {
-        return Some(status == 429);
-    }
-    class(s(v, "type")).or_else(|| m.keys().find_map(|s| class(s)))
-}
-fn rate_reset(rates: &Value, now: i64, error: bool) -> Option<(i64, i64)> {
-    ["requests", "tokens"]
-        .iter()
-        .filter_map(|kind| {
-            let reset = s(rates, &format!("reset_{kind}"));
-            let remaining = &rates[format!("remaining_{kind}")];
-            if reset.is_empty()
-                || !(integer(remaining).is_some_and(|n| n <= 0) || (error && remaining.is_null()))
-            {
-                return None;
-            }
-            parse_reset(reset, now)
-        })
-        .max_by_key(|(at, _)| *at)
-}
-fn parse_reset(text: &str, now: i64) -> Option<(i64, i64)> {
-    let text = text.trim();
-    if let Some(ns) = crate::parse_go_duration(text) {
-        return now
-            .checked_add(ns / 1_000_000)
-            .map(|at| (at, ns / 1_000_000_000));
-    }
-    if let Ok(seconds) = text.parse::<f64>()
-        && seconds > 0.0
-        && seconds.is_finite()
-    {
-        return now
-            .checked_add((seconds * 1000.0) as i64)
-            .map(|at| (at, seconds as i64));
-    }
-    chrono::DateTime::parse_from_rfc3339(text).ok().map(|t| {
-        let at = t.timestamp_millis();
-        (at, (at.saturating_sub(now) / 1000).max(0))
-    })
 }

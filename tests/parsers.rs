@@ -33,7 +33,7 @@ fn pi_usage_cost_questions_and_unicode_titles() {
     let events = parse_pi_line(&bytes(raw), "/fallback").unwrap();
     assert_eq!(events.len(), 3);
     assert_eq!(events[0].data.question.as_deref(), Some("Which?"));
-    assert_eq!(events[1].data.usage.as_ref().unwrap().total, 15);
+    assert_eq!(events[1].data.usage.as_ref().unwrap().total, 14);
     assert_eq!(events[1].data.raw_harness_cost, Some(0.25));
     assert_eq!(events[2].cwd, "/fallback");
     assert_eq!(

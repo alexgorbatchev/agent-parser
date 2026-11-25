@@ -71,6 +71,7 @@ pub fn parse_pi_line(line: &[u8], fallback_cwd: &str) -> Result<Vec<ParsedEvent>
                             last_prompt: Some(prompt.clone()),
                             title: title(&prompt),
                             skills: crate::skill::pi_prompt(&prompt),
+                            images: crate::images::pi(&msg["content"]),
                             ..Default::default()
                         },
                     )
@@ -82,6 +83,7 @@ pub fn parse_pi_line(line: &[u8], fallback_cwd: &str) -> Result<Vec<ParsedEvent>
                         tool_name: opt(first(msg, &["toolName", "tool_name"])),
                         tool_call_id: opt(first(msg, &["toolCallId", "tool_call_id"])),
                         tool_output: Some(content(&msg["content"])),
+                        images: crate::images::pi(&msg["content"]),
                         is_error: Some(
                             msg["isError"]
                                 .as_bool()
@@ -174,11 +176,11 @@ pub fn parse_pi_line(line: &[u8], fallback_cwd: &str) -> Result<Vec<ParsedEvent>
                             usage.total = n(u, "totalTokens")
                         }
                         if usage.total == 0 {
-                            usage.total = usage.input
-                                + usage.output
-                                + usage.cache_read
-                                + usage.cache_write
-                                + usage.reasoning
+                            usage.total = usage
+                                .input
+                                .saturating_add(usage.output)
+                                .saturating_add(usage.cache_read)
+                                .saturating_add(usage.cache_write);
                         }
                         usage
                     });

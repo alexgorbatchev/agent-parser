@@ -208,7 +208,9 @@ impl ClaudeCodeParser {
         if msg.is_object() {
             let mut texts = vec![];
             let mut has_result = false;
-            for b in blocks(&msg["content"], true) {
+            let blocks = blocks(&msg["content"], true);
+            let images = crate::images::claude(&blocks);
+            for b in blocks {
                 match s(&b, "type") {
                     "text" => {
                         if !s(&b, "text").is_empty() {
@@ -229,6 +231,10 @@ impl ClaudeCodeParser {
                                     output
                                 }),
                                 is_error: Some(b["is_error"].as_bool().unwrap_or(false)),
+                                images: crate::images::claude(&crate::common::blocks(
+                                    &b["content"],
+                                    true,
+                                )),
                                 ..Default::default()
                             },
                         )
@@ -236,7 +242,7 @@ impl ClaudeCodeParser {
                     _ => {}
                 }
             }
-            if !texts.is_empty() && !has_result {
+            if (!texts.is_empty() || !images.is_empty()) && !has_result {
                 let prompt = texts.join("\n");
                 let skills =
                     crate::skill::claude_prompt(raw, key, &prompt, &mut self.pending_commands);
@@ -271,6 +277,7 @@ impl ClaudeCodeParser {
                         content: Some(prompt.clone()),
                         last_prompt: Some(prompt),
                         message_uuid: opt(s(raw, "uuid")),
+                        images,
                         merged_message_uuids: raw["mergedSendUuids"]
                             .as_array()
                             .into_iter()
@@ -371,11 +378,9 @@ impl ClaudeCodeParser {
                 if !duplicate || !texts.is_empty() {
                     let u = &msg["usage"];
                     let usage = (!duplicate && u.is_object()).then(|| {
-                        let reasoning = if n(u, "thinking_tokens") != 0 {
-                            n(u, "thinking_tokens")
-                        } else {
-                            n(u, "reasoning_tokens")
-                        };
+                        let reasoning = integer(&u["output_tokens_details"]["thinking_tokens"])
+                            .or_else(|| integer(&u["thinking_tokens"]))
+                            .unwrap_or_else(|| n(u, "reasoning_tokens"));
                         let (input, output, cache_read, cache_write) = (
                             n(u, "input_tokens"),
                             n(u, "output_tokens"),
@@ -388,7 +393,10 @@ impl ClaudeCodeParser {
                             cache_read,
                             cache_write,
                             reasoning,
-                            total: input + output + cache_read + cache_write,
+                            total: input
+                                .saturating_add(output)
+                                .saturating_add(cache_read)
+                                .saturating_add(cache_write),
                         }
                     });
                     emit(

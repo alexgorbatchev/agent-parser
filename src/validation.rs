@@ -106,6 +106,12 @@ pub(crate) fn claude(v: &Value) -> Result<(), Error> {
         &["apiErrorStatus", "api_error_status", "status"],
     )?;
     fields(msg, Kind::Object, &["usage"])?;
+    fields(&msg["usage"], Kind::Object, &["output_tokens_details"])?;
+    fields(
+        &msg["usage"]["output_tokens_details"],
+        Kind::Integer,
+        &["thinking_tokens"],
+    )?;
     fields(
         &msg["usage"],
         Kind::Integer,
@@ -233,6 +239,8 @@ pub(crate) fn codex(v: &Value) -> Result<(), Error> {
                     "parent_thread_id",
                     "agent_nickname",
                     "agent_role",
+                    "agent_type",
+                    "history_mode",
                     "multi_agent_version",
                 ],
             )?;
@@ -272,10 +280,21 @@ pub(crate) fn codex(v: &Value) -> Result<(), Error> {
                     "turn_id",
                     "last_agent_message",
                     "encrypted_content",
+                    "reason",
                 ],
             )?;
-            fields(p, Kind::Integer, &["duration_ms", "model_context_window"])?;
-            fields(p, Kind::Object, &["info", "rate_limits"])?;
+            fields(
+                p,
+                Kind::Integer,
+                &["duration_ms", "started_at_ms", "model_context_window"],
+            )?;
+            fields(
+                p,
+                Kind::Object,
+                &["info", "rate_limits", "error", "thread_settings"],
+            )?;
+            fields(&p["thread_settings"], Kind::Text, &["model", "cwd"])?;
+            fields(&p["error"], Kind::Text, &["message"])?;
             fields(
                 &p["info"],
                 Kind::Object,
@@ -292,6 +311,11 @@ pub(crate) fn codex(v: &Value) -> Result<(), Error> {
                         "completion_tokens",
                         "cached_prompt_tokens",
                         "reasoning_tokens",
+                        "input_tokens",
+                        "output_tokens",
+                        "cached_input_tokens",
+                        "cache_write_input_tokens",
+                        "reasoning_output_tokens",
                     ],
                 )?
             }
@@ -308,8 +332,16 @@ pub(crate) fn codex(v: &Value) -> Result<(), Error> {
             fields(
                 &p["rate_limits"],
                 Kind::Text,
-                &["reset_requests", "reset_tokens"],
+                &["reset_requests", "reset_tokens", "rate_limit_reached_type"],
             )?;
+            fields(&p["rate_limits"], Kind::Object, &["primary", "secondary"])?;
+            for key in ["primary", "secondary"] {
+                fields(
+                    &p["rate_limits"][key],
+                    Kind::Integer,
+                    &["resets_at", "window_minutes"],
+                )?;
+            }
             summary(p)?;
             if p["type"].as_str() == Some("item_completed") && !p["item"].is_null() {
                 fields(&p["item"], Kind::Text, &["type"])?;
@@ -334,11 +366,16 @@ pub(crate) fn codex(v: &Value) -> Result<(), Error> {
                     "role",
                     "name",
                     "call_id",
-                    "arguments",
                     "query",
                     "encrypted_content",
                 ],
             )?;
+            let arguments = if p["type"].as_str() == Some("tool_search_call") {
+                Kind::Object
+            } else {
+                Kind::Text
+            };
+            fields(p, arguments, &["arguments"])?;
             summary(p)
         }
         _ => Ok(()),

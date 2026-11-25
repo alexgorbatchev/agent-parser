@@ -1,50 +1,52 @@
-# Minimum statement coverage the package must keep, enforced by `just coverage`
-min_coverage := "90"
-
-# TypeScript compiler used by `just typecheck`
-typescript_version := "7.0.2"
-
-# Default recipe: list available tasks
 default:
     @just --list
 
-# Run all unit tests with race detector
-test:
-    go test -v -race ./...
+setup:
+    cargo fetch --locked
 
-# Run the tests and fail when statement coverage drops below the floor
-coverage:
+fmt:
+    cargo fmt --package agent-parser
+
+fmt-check:
+    cargo fmt --package agent-parser -- --check
+
+lint:
+    cargo clippy --all-targets --locked -- -D warnings
+
+test:
+    cargo test --all-targets --locked
+    cargo test --doc --locked
+
+# This repository contains one library; README is a compiled documentation input.
+test-affected base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
-    go test -race -coverprofile=coverage.out ./...
-    total="$(go tool cover -func=coverage.out | awk '/^total:/ { print substr($3, 1, length($3) - 1) }')"
-    if awk "BEGIN { exit ({{ min_coverage }} <= ${total}) ? 0 : 1 }"; then
-        echo "statement coverage ${total}% meets the {{ min_coverage }}% floor"
+    base=$(git merge-base {{ quote(base) }} HEAD)
+    files=$(git diff --name-only "$base" --; git ls-files --others --exclude-standard)
+    affected=false
+    while IFS= read -r file; do
+        case "$file" in
+            ""|docs/*|LICENSE) ;;
+            *) affected=true ;;
+        esac
+    done <<< "$files"
+    if "$affected"; then
+        echo 'Selected agent-parser: source, tests, compiled README, or package configuration changed.'
+        just test
     else
-        echo "statement coverage ${total}% is below the {{ min_coverage }}% floor" >&2
-        exit 1
+        echo 'No test inputs changed.'
     fi
 
-# Typecheck canonical harness log specifications (all specs, or the given files)
-typecheck *files:
-    bun x --package typescript@{{ typescript_version }} tsc --noEmit {{ if files == "" { "docs/harness-logs/*.ts" } else { files } }}
+coverage:
+    cargo llvm-cov --all-targets --locked --ignore-filename-regex '(^|/)(tests|scripts)/' --fail-under-lines 90 --fail-under-functions 90
 
-# Format Go source code
-fmt:
-    go fmt ./...
+typecheck:
+    bun x --package typescript@7.0.2 tsc --noEmit docs/harness-logs/*.ts
 
-# Check module hygiene, vet, and run linter
-lint:
-    go mod tidy -diff
-    go vet ./...
-    golangci-lint run
+check: fmt-check lint test coverage typecheck
 
-# Run every static check, tests, coverage floor, and schema typecheck
-check:
-    just lint
-    just coverage
-    just typecheck
+build:
+    cargo build --all-targets --locked
 
-# Prepare dependencies and generated assets for local development
-setup:
-    go mod download
+docs:
+    cargo doc --no-deps --locked

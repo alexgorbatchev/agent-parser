@@ -1,203 +1,124 @@
-`agent-parser` is a pure Go library that parses raw, heterogeneous telemetry streams, session transcripts, and SQLite databases produced by AI coding agents into a unified sequence of structured events. It provides streaming parsers and offline readers for Claude Code, Pi, OpenAI Codex, OpenCode, and Google Antigravity (`agy`) without requiring CGo or external runtime services.
+`agent-parser` turns Claude Code, Pi, Codex, Antigravity (`agy`), and OpenCode transcripts into typed Rust events for session viewers, observers, and usage analysis.
+
+The Go implementation is deprecated. Its source is available on the [`go-legacy` branch](https://github.com/alexgorbatchev/agent-parser/tree/go-legacy) and from existing Go release tags. [`go-upstream.json`](go-upstream.json) records the Go revision covered by the Rust port. The [canonical harness schemas](docs/harness-logs) describe the native formats.
 
 # What It Does
 
-- **Multi-harness log parsing**: Streams and decodes log entries from Claude Code (JSONL), Pi (DAG trees), OpenAI Codex (date-partitioned rollout JSONL), OpenCode (SQLite WAL databases), and Google Antigravity (`agy` headless stream-json, persisted JSONL transcripts, and read-only SQLite conversation stores).
-- **Tool call and diff normalization**: Converts disparate edit and write operations across harnesses (`Edit`, `MultiEdit`, `Write`, `apply_patch`) into a canonical `FileModification` struct with unified line-by-line diff hunks.
-- **Images**: Images attached to prompts and tool results arrive in `EventData.Images` as base64 data with its media type, or as the URL or file ID the harness referenced, for Claude Code, Pi, and OpenAI Codex. A prompt with only an image still starts a turn.
-- **Token usage tracking**: Extracts granular token metrics (input, output, cache read/write, reasoning) and harness-reported costs.
-- **Session title extraction**: Automatically identifies session titles from user prompts, explicit title records (`ai-title`, `custom-title`), and first human messages while stripping harness-injected synthetic context blocks.
-- **Rate limit and error detection**: Captures HTTP status codes, rate limit resets, retry delays, and tool execution failures. A tool result's `IsError` is nil when the transcript records no outcome, such as a Codex call that is still running, was aborted, or wrote no status header.
-- **Native recaps and questions**: Emits Claude Code `system/away_summary` text as `summary` events. Codex `request_user_input`, `request_user_input_async`, and completed `AgentMessage` questions produce `question_prompt` events; ordinary completed agent messages produce `agent_message` events.
-- **Skill invocations**: `EventData.Skills` lists the agent skills an event invokes, with the skill name, whether the model or the user invoked it, and its path when recorded. Model loads appear on the tool call that loads the skill (Claude Code `Skill`, OpenCode `skill`, Pi `read` of a `SKILL.md` from line 1). User invocations appear on the user turn that runs one (Claude Code slash commands, Pi `/skill:name`). Codex records neither on an existing event: its `$name` mentions and shell reads of skills' `SKILL.md` files emit separate `skill_invoked` events.
-- **Session discovery**: `DiscoverSessions` lists the sessions each harness stores on disk, read-only, using the harness's own locations and environment overrides: Claude Code projects with subagents, Codex sessions and `archived_sessions`, Pi sessions with forks, OpenCode session rows, and Antigravity (`agy`) brain transcripts with detached subagent links. `OpenTranscript` reads a transcript and transparently decompresses Codex's zstd `.jsonl.zst` rollouts.
-- **Zero CGo overhead**: Reads OpenCode SQLite databases through the pure Go `modernc.org/sqlite` driver and zstd transcripts through `github.com/klauspost/compress/zstd`, so consumers can cross-compile with `CGO_ENABLED=0`.
+- **Transcript parsing**: Converts individual JSONL records into normalized lifecycle, text, reasoning, tool, question, summary, usage, and error events.
+- **Streaming state**: Correlates Claude Code usage blocks and carries Codex model and rate-limit state between records.
+- **Headless output**: Normalizes live Claude Code, Codex, and Antigravity streams and retains the latest runner result.
+- **Session discovery**: Finds persisted transcripts and OpenCode sessions, including archives, forks, and subagents.
+- **File changes**: Normalizes write, edit, and delete operations, including recorded Codex file moves and unified diff hunks.
+- **OpenCode snapshots**: Reads sessions, messages, parts, projects, and pending permissions from SQLite, and reconstructs chronological event timelines.
+- **Antigravity metadata**: Reads conversation summaries, parent links, and workspace paths from native SQLite stores and legacy JSON sidecars.
 
 # How It Works
 
-Consumers feed raw log lines or database handles into the appropriate parser instance. As records are processed, `agent-parser` returns a slice of `ParsedEvent` structs containing standardized event types (`run_started`, `turn_start`, `agent_message`, `question_prompt`, `thinking`, `tool_call`, `tool_result`, `file_modification`, `compaction`, `skill_invoked`, `model_change`, `title_change`, `summary`, `message_absorbed`, `usage`, `turn_end`, `error`). Every harness parser uses this same vocabulary. `usage` reports token usage, context window, and rate-limit metadata for one model response without ending the turn; harnesses that report usage on the response that ends a turn attach it to `turn_end` instead. `TokenUsage` means the same for every harness: `Input` is fresh input, `Output` is every generated token including `Reasoning`, `Reasoning` is the part of `Output` spent on reasoning, and `Total` never adds `Reasoning` again. OpenCode counts reasoning apart from output from version 1.3.16; the parser tells each message's format from its recorded total, falling back to the version that created the session. A tool call that edits one file carries its `FileModification`; a Codex patch, which can change several files, is followed by one `file_modification` event per file it changed, correlated by `ToolCallID`. `compaction` marks where a harness replaced the conversation history with a summary (`Content`, when recorded). Input another agent sends to this one is reported like a prompt with `Role` `agent`.
-
-When tool calls perform file edits or patches, `agent-parser` parses the parameters into unified diffs (`DiffHunk` and `DiffLine`), providing downstream consumers with consistent change sets regardless of the originating tool or harness format.
+1. Feed each JSONL record to the parser for its harness, retaining one stateful parser for a Claude Code, Codex, or Antigravity stream.
+2. Consume the returned events, preserving their timestamps, recorded tool inputs, token counts, and optional error details.
+3. For OpenCode, open a database and request a session snapshot or a reconstructed event timeline.
 
 # How it Really Works
 
-- **Faithful parsing without synthetic metrics**: `agent-parser` extracts only the fields recorded by the harness. It does not perform external model catalog lookups or calculate synthetic metrics like context window fullness; enrichment is left to downstream consumers.
-- **Streaming multi-block deduplication**: Claude Code streams assistant responses across separate lines sharing the same `requestId` and `message.id`. `ClaudeCodeParser` deduplicates usage reporting across blocks so total token counts are never multiplied.
-- **Synthetic prompt filtering**: OpenAI Codex records context it injects for the model (instructions, environment state, skills, notifications) as user-role messages, and Claude Code injects synthetic command sequences. For paginated Codex rollouts, `CodexParser` takes prompts from Codex's completed `UserMessage` items, which leave that context out; otherwise it applies Codex's contextual-fragment rule to user messages. Title extraction also strips leading `<environment_context>` blocks.
-- **In-memory state management**: Parsers (`ClaudeCodeParser`, `CodexParser`) maintain safe in-memory state protected by sync primitives to correlate streaming requests, resolve turn context across lines, and track active models.
-- **Read-only SQLite access**: `OpenOpencodeDB` connects to OpenCode's WAL database in read-only mode, querying sessions, messages, and parts without database locks or write side-effects.
-
-# Prerequisites
-
-- Go 1.26.2 or higher
-- [Bun](https://bun.sh) for contributors: `just check` typechecks the canonical schema specifications in `docs/harness-logs/` with a pinned TypeScript version. Code that only imports the library does not need Bun.
+- JSONL parsing is synchronous and operates on the bytes supplied by the caller. It reads no files, environment variables, credentials, network services, or model catalogs.
+- Claude Code deduplicates usage by session and request/message identity. Its bounded FIFO remembers up to 200 identities and evicts the oldest 100 at capacity. Text and tool events retain their source semantics. `reset()` clears correlation state.
+- Codex retains the recorded model, context window, active rate-limit reset, and turn state between calls. It pairs the first prompt with the turn start and emits subsequent prompts as `message_absorbed`. Stateful parsing skips inherited records when a subagent supplies its first ordinal.
+- Codex emits per-response token counts as `usage` and closes turns with `task_complete` or `turn_aborted`. The stateful parser suppresses repeated cumulative counts, tracks quota refreshes, and pairs paginated history items with their recorded prompts and tool results.
+- `TokenUsage.reasoning` is the part of output spent on reasoning. Computed totals count it once. Claude Code reads this count from `output_tokens_details` when present.
+- Image-bearing messages and tool results can include `EventData.images` with inline data, a URL, or a harness file ID.
+- Antigravity reads native `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC`, and `SYSTEM_MESSAGE` records from full or compact transcripts. Tool results match pending calls in recorded order; a new user turn clears pending calls. Token totals include input, output, and cache reads; reasoning remains separate. Token-total overflow returns an error without changing parser state.
+- Parsers require mutable access. Use separate instances for independent streams, and synchronize externally when sharing an instance between threads.
+- Skill events identify user and model invocations. Detection uses recorded tool inputs and parses literal shell arguments without executing transcript commands.
+- Session discovery reads harness-specific directories and OpenCode databases. It returns partial results alongside filesystem and decoding errors. Compressed transcripts stream through the same buffered interface as plain files.
+- Event timestamps are milliseconds since the Unix epoch. Missing envelope timestamps fall back to the current time; Claude Code first inherits its last recorded timestamp. Codex lifecycle timestamps recorded as integer seconds are converted to milliseconds.
+- OpenCode filesystem SQLite databases open read-only with a five-second busy timeout. Snapshot reads use one transaction; callers can interrupt running queries through `interrupt_handle()`. SQLite calls block. `:memory:` creates an isolated in-memory database; `new(connection)` keeps the supplied connection's access policy.
+- Antigravity metadata reads open existing SQLite files read-only with a 100 ms busy timeout. Summary reads use one transaction, support an absent parent-index table, and retain database errors. Workspace reads prefer a nonempty legacy JSON `cwd`, then decode the native trajectory protobuf, limited to 1 MiB. File URIs become platform paths with percent escapes decoded. These helpers read only the paths supplied by the caller; they do not discover sessions or launch the harness.
+- OpenCode token totals include reasoning once. Session totals use the stored OpenCode version. Timelines also use each message's recorded total to detect the accounting format. Session totals outside the signed 64-bit range return a typed SQLite conversion error.
+- Known fields with incorrect JSON types return typed errors. Unknown record types produce no events. Unknown tool parameters remain in `tool_input`.
+- Single-file normalization returns `None` for multi-file unified patches, preserving the original patch in the event's tool input. It does not attribute unrelated hunks to one path.
 
 # Installation
 
-```bash
-go get github.com/alexgorbatchev/agent-parser
+Run this from the consuming Rust project.
+
+```sh
+cargo add agent-parser --git https://github.com/alexgorbatchev/agent-parser.git
 ```
 
 # Quick Start
 
-```go
-package main
+```rust
+use agent_parser::ClaudeCodeParser;
 
-import (
-	"bufio"
-	"fmt"
-	"log"
-	"os"
-
-	"github.com/alexgorbatchev/agent-parser"
-)
-
-func main() {
-	file, err := os.Open("session.jsonl")
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-
-	parser := parser.NewClaudeCodeParser()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 1<<20), 64<<20) // transcript lines often exceed bufio's 64 KiB default
-
-	for scanner.Scan() {
-		events, err := parser.ParseLine(scanner.Bytes())
-		if err != nil {
-			continue
-		}
-
-		for _, ev := range events {
-			fmt.Printf("[%s] Type: %s", ev.EventType, ev.EventType)
-			if ev.Data.ToolName != nil {
-				fmt.Printf(" Tool: %s", *ev.Data.ToolName)
-			}
-			if ev.Data.FileModification != nil {
-				fmt.Printf(" File: %s (%s)", ev.Data.FileModification.FilePath, ev.Data.FileModification.Action)
-			}
-			fmt.Println()
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
+fn main() -> Result<(), agent_parser::Error> {
+    let mut parser = ClaudeCodeParser::new();
+    let line = br#"{"type":"user","sessionId":"session","timestamp":1000,"message":{"role":"user","content":"Explain this code"}}"#;
+    for event in parser.parse_line(line)? {
+        println!("{}: {}", event.timestamp, event.event_type);
+    }
+    Ok(())
 }
+```
+
+Output:
+
+```text
+1000: run_started
+1000: turn_start
 ```
 
 # API
 
-### Parser Instances and Functions
+### Streaming records
 
-| Export | Signature | Description |
-| :--- | :--- | :--- |
-| `NewClaudeCodeParser` | `() *ClaudeCodeParser` | Constructs a Claude Code streaming JSONL parser with multi-block deduplication |
-| `ParsePiLine` | `(line []byte, fallbackCWD string) ([]ParsedEvent, error)` | Parses a single Pi session JSONL entry |
-| `NewCodexParser` | `() *CodexParser` | Constructs an OpenAI Codex CLI rollout parser with stateful turn tracking |
-| `ParseCodexLine` | `(line []byte) ([]ParsedEvent, error)` | Stateless helper parsing one OpenAI Codex line without cross-line context. It cannot apply rules that need the whole rollout (turn boundaries, forked-subagent inherited history, usage re-send detection, paginated prompt and message sources, nested tool items); use `CodexParser` to parse a rollout |
-| `OpenOpencodeDB` | `(dbPath string) (*OpencodeDB, error)` | Opens an OpenCode SQLite database in read-only mode |
-| `NormalizeFileModification` | `(toolName string, toolInput map[string]interface{}) *FileModification` | Normalizes tool parameters into canonical diffs |
+`ClaudeCodeParser::new()`, `CodexParser::new()`, and `AgyParser::new()` construct stateful parsers. Each exposes `parse_line(&mut self, line: &[u8]) -> Result<Vec<ParsedEvent>, Error>` and `reset(&mut self)`.
 
-### Activity Timestamps
+`parse_codex_line(line: &[u8])` and `parse_agy_line(line: &[u8])` parse without retained state. `parse_pi_line(line: &[u8], fallback_cwd: &str)` parses a Pi record, using the supplied directory when the record omits it. Each returns `Result<Vec<ParsedEvent>, Error>`.
 
-Each function accepts one native JSONL record and returns `(timestamp int64, found bool, err error)`. The timestamp is Unix milliseconds from the record's outer `timestamp` string.
+`LiveParser::new(harness)` accepts `claude-code`, `codex`, or `agy` and returns a parser for headless output. Feed the parser one record at a time with `parse_line` and retrieve its latest normalized runner result with `result()`.
 
-| Export | Activity records |
-| :--- | :--- |
-| `ClaudeCodeActivityTimestamp` | `user`, `assistant`, `attachment`, `system`, and `progress` |
-| `PiActivityTimestamp` | `message`, `custom_message`, `compaction`, and `branch_summary` |
-| `CodexActivityTimestamp` | `turn_context` and the `event_msg` / `response_item` payload variants in the [canonical Codex schema](docs/harness-logs/codex.ts) |
+`claude_code_activity_timestamp`, `codex_activity_timestamp`, `pi_activity_timestamp`, and `agy_activity_timestamp` extract native activity timestamps in Unix milliseconds when the record represents activity.
 
-Metadata and unknown record types return `found=false`. Missing, null, or empty timestamps also return `found=false`; malformed JSON and invalid timestamps on activity records return an error. Valid timestamps require an RFC3339 timezone and may contain fractional seconds. Numeric timestamps and zone-less strings are rejected. An epoch timestamp returns `0, true, nil`.
+### Discovery and transcript input
 
-Pi's nested message timestamp describes message creation, and Codex task payload timestamps describe lifecycle boundaries; neither overrides the outer record time. These functions read one record without changing parser state, scanning files, or substituting the current time. Callers choose traversal order and handle records without usable activity times.
+`discover_sessions(&DiscoverOptions)` returns `Discovery` with session sources and errors. Supply a home directory and any harness filters. An empty filter includes every supported harness. `discover_sessions_until` also accepts a cancellation callback.
 
-### Session Discovery
+`open_transcript(path)` returns a buffered reader for plain or Zstandard-compressed transcripts. Open SQLite session sources through `OpencodeDb`.
 
-| Export | Signature | Description |
-| :--- | :--- | :--- |
-| `DiscoverSessions` | `(ctx context.Context, opts DiscoverOptions) ([]SessionSource, error)` | Lists stored sessions for the selected harnesses, read-only |
-| `DiscoverOptions` | `struct { Harnesses []Harness; Home string }` | Empty `Harnesses` means every supported harness; empty `Home` means the user's home directory |
-| `SessionSource` | `struct` | `Harness`, `SessionID`, `ParentSessionID`, `Path`, `Subagent`, `Fork`, `ForkedAt`, `Archived`, `ModTime` |
-| `Harness` | `string` | `HarnessClaudeCode`, `HarnessCodex`, `HarnessPi`, `HarnessOpencode` |
-| `SupportedHarnesses` | `() []Harness` | Returns a new slice of every supported harness |
-| `OpenTranscript` | `(path string) (io.ReadCloser, error)` | Opens a transcript, decompressing zstd `.jsonl.zst` files |
+### Prompt and path helpers
 
-```go
-sources, err := parser.DiscoverSessions(ctx, parser.DiscoverOptions{Harnesses: []parser.Harness{parser.HarnessCodex}})
-if err != nil {
-	log.Printf("some sessions could not be listed: %v", err) // sources still holds everything found
-}
-for _, source := range sources {
-	reader, err := parser.OpenTranscript(source.Path)
-	if err != nil {
-		continue
-	}
-	codex := parser.NewCodexParser()
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 1<<20), 64<<20) // transcript lines often exceed bufio's 64 KiB default
-	for scanner.Scan() {
-		events, _ := codex.ParseLine(scanner.Bytes())
-		_ = events
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("reading %s: %v", source.Path, err)
-	}
-	_ = reader.Close()
-}
-```
+`clean_claude_code_prompt` and `clean_codex_prompt` remove recognized leading synthetic context blocks. `extract_claude_code_title_from_prompt`, `extract_codex_title_from_prompt`, and `extract_pi_title_from_prompt` return an optional first-line title of up to 100 Unicode characters.
 
-A fork (`Fork`) is a Claude Code fork subagent or a Pi fork. Its transcript can replay the parent's history before its own entries, so `ForkedAt` gives the time the fork was created: the parent's spawning tool call for Claude Code, the session header for Pi. Drop events at or before `ForkedAt` to avoid counting the parent's history twice; a copied Claude Code fork replays the spawning call itself with exactly that time. Results are sorted by harness, path, and session ID. Missing locations are skipped silently. Unreadable directories, malformed Pi headers, Claude Code subagents whose `.meta.json` is missing or unreadable, Claude Code forks whose spawn cannot be found, and unreadable OpenCode databases are joined into the returned error while every session, including those forks, is still returned. Symlinked root directories are followed, and `Path` keeps the configured root. Discovery parses only what identifies a session: the first record of Pi subagent runs and forks, Claude Code subagent `.meta.json` files, and, for a Claude Code fork, the parent record holding its spawning tool call. OpenCode sources share one database `Path` per session row: read them with `OpenOpencodeDB` and `ReconstructSessionEvents`, not `OpenTranscript`.
+`parse_codex_rollout_path(path: &str) -> Result<CodexRolloutFilenameInfo, Error>` extracts the timestamp, session identity, and optional date partition from flat or partitioned rollout paths, including Windows separators.
 
-### Core Types
+`normalize_file_modification(tool_name: &str, input: Option<&serde_json::Map<String, serde_json::Value>>) -> Option<FileModification>` returns single-file `EDIT` or `WRITE` data. Diff line types are `add`, `del`, and `ctx`.
 
-```go
-type ParsedEvent struct {
-	EventType string    `json:"eventType"`
-	Timestamp int64     `json:"timestamp"`
-	CWD       string    `json:"cwd"`
-	GitBranch string    `json:"gitBranch"`
-	Data      EventData `json:"data"`
-}
+`parse_go_duration` reads a signed Go-style duration in nanoseconds. It returns `None` for unknown units, invalid syntax, or values outside the signed 64-bit range.
 
-type Event = ParsedEvent
+### OpenCode
 
-type FileModification struct {
-	Action   string     `json:"action"` // "EDIT" | "WRITE"
-	FilePath string     `json:"filePath"`
-	Hunks    []DiffHunk `json:"hunks,omitempty"`
-	Content  *string    `json:"content,omitempty"`
-}
+`OpencodeDb::open(path)` opens a database. `get_sessions`, `get_session_by_id`, `get_child_sessions`, `get_messages`, `get_parts`, `get_parts_by_message`, `get_projects`, and `get_pending_permissions` return typed rows or `Error`.
 
-type Image struct {
-	MediaType string `json:"mediaType,omitempty"` // with Data
-	Data      string `json:"data,omitempty"`      // base64
-	URL       string `json:"url,omitempty"`
-	FileID    string `json:"fileId,omitempty"`
-}
+`session_snapshot(session_id)` returns `OpencodeSessionSnapshot { session, messages, parts }` from one transaction. `reconstruct_session_events(session_id)` returns its timeline. The free `reconstruct_session_events(&session, &messages, &parts)` accepts an existing snapshot and returns `Vec<ParsedEvent>`.
 
-type TokenUsage struct {
-	Input      int64 `json:"input"`
-	Output     int64 `json:"output"`
-	CacheRead  int64 `json:"cacheRead"`
-	CacheWrite int64 `json:"cacheWrite"`
-	Reasoning  int64 `json:"reasoning"`
-	Total      int64 `json:"total"`
-}
-```
+`connection()` borrows the native database connection; `interrupt_handle()` returns a handle usable from another thread. `close(self)` consumes the database and reports close failures.
 
-# Supported Harnesses
+`parse_opencode_model(raw)` returns a model ID and optional structured configuration. `parse_opencode_message_data(raw)` and `parse_opencode_part_data(raw)` decode stored JSON payloads.
 
-| Harness | Log Format | Locations discovered by `DiscoverSessions` | Overrides |
-| :--- | :--- | :--- | :--- |
-| **Claude Code** | JSONL stream | `~/.claude/projects/<slug>/<sessionId>.jsonl`; subagents at `<slug>/<sessionId>/subagents/[workflows/<run>/]agent-<id>.jsonl` (forks identified by their `.meta.json`) and legacy `<slug>/agent-<id>.jsonl` | `CLAUDE_CONFIG_DIR` (searched before `~/.claude`) |
-| **Pi Coding Agent** | JSONL DAG tree | `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<id>.jsonl`; forks at `<ts>_<parent>/forks/<ts>_<id>.jsonl`; subagent runs at `<ts>_<parent>/<run>/run-<n>/session.jsonl` | `PI_SESSIONS_DIR`, then `PI_CODING_AGENT_DIR/sessions` |
-| **OpenAI Codex CLI** | Rollout JSONL, plain or zstd `.jsonl.zst` | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl[.zst]` and `~/.codex/archived_sessions/rollout-*.jsonl[.zst]` | `CODEX_SESSIONS_DIR`, `CODEX_HOME` |
-| **OpenCode** | SQLite WAL database | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db` and channel `opencode-<channel>.db` | `OPENCODE_DB_PATH`, then OpenCode's `OPENCODE_DB` (absolute or relative to the data directory) |
+### Antigravity metadata
 
-Canonical TypeScript definitions and schema quirks for all four harnesses are documented in [`docs/harness-logs/`](./docs/harness-logs/).
+`read_agy_summaries(path)` returns `HashMap<String, AgyConversationSummary>` keyed by native conversation ID. Entries retain the title, status, parent ID, workspace paths, optional last-modified Unix milliseconds, and native idle/killed flags.
+
+`read_agy_conversation_workspaces(conversations_directory, conversation_id)` returns `Vec<PathBuf>` from the legacy sidecar or trajectory database. The ID must be a single path component. Missing databases are errors and are never created.
+
+The [native Antigravity reference types](docs/harness-logs/antigravity.ts) record transcript, database, protobuf, detached-subagent, and headless-output formats with their upstream provenance. Use `AgyParser` for persisted transcripts and `LiveParser` for headless output.
+
+### Events and errors
+
+`ParsedEvent`, `EventData`, `TokenUsage`, `Image`, `FileModification`, `DiffHunk`, `DiffLine`, and the `Opencode*` payload and row types support serialization and deserialization. JSON field names retain the transcript consumer contract, including camelCase event fields and optional omitted values.
+
+`Error::Json` retains malformed JSON details, `Error::Invalid` reports invalid record structure, timestamps, identifiers, or overflowing token totals, and `Error::Sqlite` retains native database failures. `Error::Io` retains sidecar read failures; `Error::Protobuf` retains trajectory decoding failures. Missing sessions return a SQLite query error.
 
 # License
 
-[MIT](LICENSE)
+[MIT](LICENSE), copyright 2026 Alex Gorbatchev.

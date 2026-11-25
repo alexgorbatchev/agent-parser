@@ -1,18 +1,9 @@
-# Binaries & build outputs
-bin/
-dist/
-*.exe
-*.test
-*.out
-coverage.out
-
-# Temporary directories & databases
-.tmp/
-*.db
-*.db-wal
-*.db-shm
-
-# OS & Editor
-.DS_Store
-.vscode/
-.idea/
+/target/
+/.state/
+/.worktrees/
+/.tmp/
+/.cache/
+/.codegraph/
+/.pi-subagents/
+*.sqlite-wal
+*.sqlite-shm

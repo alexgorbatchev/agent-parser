@@ -1,45 +1,7 @@
 # agent-parser
 
-Pure Go streaming log parsers, database readers, and canonical specifications for AI coding agent harnesses (Claude Code, Pi, OpenAI Codex, OpenCode, Antigravity/agy).
-
-## Shared commands
-
-- Run all tests: `just test`
-- Enforce 90% statement coverage: `just coverage`
-- Typecheck canonical harness schemas: `just typecheck`
-- Lint and verify module hygiene: `just lint`
-- Run all checks (lint, coverage, typecheck): `just check`; CI runs the same recipe on pull requests and pushes to `main`
-- Format Go source: `just fmt`
-
-## Key gotchas
-- **Live harness output:** `NewLiveParser` decodes Codex exec JSONL, Claude print/stream JSON, and Antigravity (`agy`) headless stream-json directly. Preserve deltas separately from complete message snapshots, native terminal results, structured output, and reported run usage. A native result is not proof that its subprocess exited successfully; the caller owns exit status and validation.
-- **Native recaps and async questions**: Claude Code `system/away_summary` emits `summary` with `Data.Content`. Codex question tool calls (`request_user_input` and friends) emit `question_prompt` with their tool arguments and call IDs. In paginated history, completed `AgentMessage` items are the `agent_message` source; an item with `questions` projects a question tool call and emits nothing.
-
-- **Images**: Prompt and tool-result images go in `EventData.Images`; text fields keep only text. Codex tool outputs are the exception: `ToolOutput` keeps the raw content array, image data included, so media and unknown blocks are not lost.
-- **Claude Code delivery evidence**: A sent UUID lands in `user.uuid` for a normal turn, `mergedSendUuids` for queued messages merged into a turn, and a `queue-operation` `remove` with `reason: absorbed_mid_turn` for messages absorbed mid-turn, which have no `user` record. `enqueue` and `dequeue` records carry no UUID, so a transcript proves consumption but never queueing; a missing record means unknown.
-- **Faithful parsing**: Parsers decode logs faithfully without external model catalog lookups or synthetic metrics (such as context window fullness calculations); downstream consumers handle catalog enrichment.
-- **Pure Go SQLite**: OpenCode SQLite reading uses `modernc.org/sqlite`, registered in `opencode.go` and used through `database/sql` as driver `sqlite`. It needs no CGo or local SQLite C libraries, so consumers can cross-compile with `CGO_ENABLED=0`.
-- **Read-only DB access**: OpenCode database handles must strictly be opened in read-only mode (`?mode=ro`) to prevent write locks or interfering with running agents.
-- **Claude Code multi-block deduplication**: Claude Code streams assistant content across separate lines sharing the same `requestId`. Parsers must deduplicate usage to avoid multiplying token metrics.
-- **Schema sync contract**: All Go types and parsing logic must match the canonical TypeScript definitions in `docs/harness-logs/` (`claude-code.ts`, `pi.ts`, `codex.ts`, `opencode.ts`, `antigravity.ts`, `live.ts`).
-
-## Boundaries
-
-- **Always**: automatically record all new user instructions in `AGENTS.md` immediately upon receipt (check with user if existing instructions conflict).
-- **Always**: any time code is changed such that results from running that code are changed, a test file must be changed as well; 90% code coverage is required.
-- **Always**: run `just check` before committing changes.
-- **Always**: publish releases, tags, and packages when required to complete authorized work, after required validation and publication checks.
-- **Never**: deploy to production without explicit user authorization.
-- **Never**: perform external model catalog lookups or synthetic fullness calculations inside parser loops.
-- **Never**: add CGo dependencies.
-
-## References
-
-- Canonical harness schemas: `docs/harness-logs/`
-- Core types: `types.go`
-- Claude Code parser: `claudecode.go`
-- Pi parser: `pi.go`
-- Codex parser: `codex.go`
-- OpenCode parser: `opencode.go`
-- Antigravity (agy) parser: `agy.go`, `live_agy.go`
-- File diff normalizer: `file_modification.go`
+- Run `just check` before committing. It runs formatting, Clippy, tests, the 90% line and function coverage gates, and the harness schema typecheck.
+- When changing parser behavior, update the behavioral tests and the affected native format definitions in [the harness schemas](docs/harness-logs/).
+- Keep parser output faithful to the recorded input. Preserve native usage counts, question call IDs, media, Claude Code consumption evidence, and live result records. Callers determine subprocess exit success and model catalog enrichment.
+- Open harness databases read-only. Preserve bounded stream correlation, including deduplication of multi-block Claude Code usage records.
+- Publish required releases, tags, and packages after the applicable checks pass. Require explicit authorization for production deployments.

@@ -3,9 +3,9 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
@@ -17,23 +17,20 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
       - uses: extractions/setup-just@v4
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.2
-          install-only: true
-
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy llvm-tools --toolchain stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install coverage tool
+        run: |
+          if ! cargo llvm-cov --version | grep -Fx 'cargo-llvm-cov 0.9.1'; then
+            cargo install --locked --version 0.9.1 cargo-llvm-cov
+          fi
       - name: Check
         run: just check

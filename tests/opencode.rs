@@ -14,7 +14,7 @@ fn database_reads_real_rows_without_writing() {
     let db = OpencodeDb::open(&path).unwrap();
     assert!(db.connection().execute("DELETE FROM session", []).is_err());
     let sessions = db.get_sessions().unwrap();
-    assert_eq!(sessions[0].tokens.total, 19);
+    assert_eq!(sessions[0].tokens.total, 21);
     assert_eq!(sessions[0].model, "model");
     assert!(db.get_child_sessions("s").unwrap().is_empty());
     assert_eq!(db.get_session_by_id("s").unwrap(), sessions[0]);
@@ -42,7 +42,7 @@ fn database_reads_real_rows_without_writing() {
             .iter()
             .map(|e| e.event_type.as_str())
             .collect::<Vec<_>>(),
-        ["run_started", "user_prompt", "text", "turn_end"]
+        ["run_started", "turn_start", "agent_message", "turn_end"]
     );
     assert!(db.get_session_by_id("absent").is_err());
     db.close().unwrap();
@@ -60,6 +60,7 @@ fn reconstruction_orders_events_and_preserves_structured_errors() {
     let message=OpencodeMessage{id:"a".into(),time_created:1100,data:parse_opencode_message_data(r#"{"role":"assistant","tokens":{"input":2,"output":1},"finish":"error","error":{"name":"APIError","data":{"statusCode":429,"message":"slow","responseHeaders":{"retry-after":"2"}}}}"#).unwrap(),..Default::default()};
     let tool=OpencodePart{message_id:"a".into(),time_created:1200,data:parse_opencode_part_data(r#"{"type":"tool","tool":"edit","callID":"call","state":{"status":"completed","input":{"path":"a","old_string":"x","new_string":"y"},"output":"done","time":{"start":1150,"end":1300}}}"#).unwrap(),..Default::default()};
     let events = reconstruct_session_events(&session, &[message], &[tool]);
+    assert_eq!(events[1].event_type, "tool_call");
     assert_eq!(
         events[1].data.file_modification.as_ref().unwrap().file_path,
         "a"
@@ -84,6 +85,40 @@ fn reconstruction_orders_events_and_preserves_structured_errors() {
     let (id, cfg) = parse_opencode_model(&json!({"id":"x","providerID":"p"}).to_string());
     assert_eq!(id, "x");
     assert_eq!(cfg.unwrap().provider_id, "p");
+}
+
+#[test]
+fn reads_opencode_reasoning_totals_across_session_versions() {
+    for (version, recorded_total, output, total) in [
+        ("1.3.16-rc.1", 0, 12, 26),
+        ("v1.3.16", 0, 17, 31),
+        ("1.3.15", 31, 17, 31),
+        ("1.3.17", 26, 12, 26),
+        ("unknown", 0, 17, 31),
+    ] {
+        let session = OpencodeSession {
+            version: version.into(),
+            ..Default::default()
+        };
+        let data = parse_opencode_message_data(
+            &json!({"role":"assistant","tokens":{"input":10,"output":12,"reasoning":5,"cache":{"read":3,"write":1},"total":recorded_total}}).to_string(),
+        )
+        .unwrap();
+        let events = reconstruct_session_events(
+            &session,
+            &[OpencodeMessage {
+                data,
+                ..Default::default()
+            }],
+            &[],
+        );
+        let usage = events[1].data.usage.as_ref().unwrap();
+        assert_eq!(
+            (usage.output, usage.total, usage.reasoning),
+            (output, total, 5),
+            "{version}"
+        );
+    }
 }
 
 #[test]

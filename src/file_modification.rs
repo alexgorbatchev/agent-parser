@@ -29,7 +29,7 @@ pub fn normalize_file_modification(
     let path = if path.is_empty() { "untitled" } else { path };
     let patch = first(&v, &["patch", "diff"]);
     if !patch.is_empty() {
-        return parse_patch(patch, path);
+        return parse_patch(patch, path, false);
     }
     let edits = ["edits", "ReplacementChunks", "replacement_chunks"]
         .iter()
@@ -64,6 +64,7 @@ pub fn normalize_file_modification(
         return Some(FileModification {
             action: "WRITE".into(),
             file_path: path.into(),
+            previous_path: String::new(),
             content: Some(content.into()),
             hunks: vec![],
         });
@@ -133,6 +134,7 @@ pub fn normalize_file_modification(
     Some(FileModification {
         action: "EDIT".into(),
         file_path: path.into(),
+        previous_path: String::new(),
         hunks,
         content: None,
     })
@@ -165,26 +167,30 @@ fn build_hunk(old: &str, new: &str, header: String) -> DiffHunk {
         lines: lines_out,
     }
 }
-fn parse_patch(patch: &str, fallback: &str) -> Option<FileModification> {
+pub(crate) fn parse_patch(
+    patch: &str,
+    fallback: &str,
+    hunks_only: bool,
+) -> Option<FileModification> {
     let mut path = fallback.to_owned();
     let mut paths = std::collections::HashSet::new();
     let mut hunks = vec![];
     let mut current: Option<DiffHunk> = None;
-    let (mut old, mut new) = (1, 1);
+    let (mut old, mut new) = (1_i64, 1_i64);
     for line in patch.split_terminator('\n') {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
+        if !hunks_only && let Some(rest) = line.strip_prefix("diff --git ") {
             if let Some(p) = rest.split_whitespace().nth(1) {
                 path = p.strip_prefix("b/").unwrap_or(p).to_owned();
                 paths.insert(path.clone());
             }
             continue;
         }
-        if let Some(p) = line.strip_prefix("+++ b/") {
+        if !hunks_only && let Some(p) = line.strip_prefix("+++ b/") {
             path = p.trim().to_owned();
             paths.insert(path.clone());
             continue;
         }
-        if line.starts_with("--- ") {
+        if !hunks_only && line.starts_with("--- ") {
             continue;
         }
         if line.starts_with("@@ ") {
@@ -204,17 +210,17 @@ fn parse_patch(patch: &str, fallback: &str) -> Option<FileModification> {
         let Some(h) = current.as_mut() else { continue };
         let (kind, text, old_num, new_num) = if let Some(s) = line.strip_prefix('-') {
             let n = old;
-            old += 1;
+            old = old.checked_add(1)?;
             ("del", s, Some(n), None)
         } else if let Some(s) = line.strip_prefix('+') {
             let n = new;
-            new += 1;
+            new = new.checked_add(1)?;
             ("add", s, None, Some(n))
         } else if line.starts_with(' ') || line.is_empty() {
             let o = old;
             let n = new;
-            old += 1;
-            new += 1;
+            old = old.checked_add(1)?;
+            new = new.checked_add(1)?;
             (
                 "ctx",
                 line.strip_prefix(' ').unwrap_or(line),
@@ -240,6 +246,7 @@ fn parse_patch(patch: &str, fallback: &str) -> Option<FileModification> {
     Some(FileModification {
         action: "EDIT".into(),
         file_path: path,
+        previous_path: String::new(),
         hunks,
         content: None,
     })

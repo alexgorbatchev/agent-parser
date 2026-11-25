@@ -6,10 +6,13 @@ mod agy;
 mod agy_metadata;
 mod claude;
 mod codex;
+mod codex_context;
+mod codex_file_change;
 mod codex_response;
 mod codex_rollout;
 mod common;
 mod discovery;
+mod duration;
 mod file_modification;
 mod live;
 mod opencode_db;
@@ -38,6 +41,7 @@ pub use discovery::{
     DiscoverOptions, Discovery, Harness, SessionSource, discover_sessions, discover_sessions_until,
     open_transcript,
 };
+pub use duration::parse_go_duration;
 pub use file_modification::normalize_file_modification;
 pub use live::{LiveParser, LiveResult};
 pub use opencode_db::OpencodeDb;

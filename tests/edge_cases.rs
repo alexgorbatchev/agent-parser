@@ -141,11 +141,11 @@ fn codex_lifecycle_timestamp_units_and_invalid_values() {
         (Value::Null, 1000),
         (json!(""), 1000),
     ] {
-        let events = codex(
-            &mut CodexParser::new(),
-            1000,
-            json!({"type":"task_started","started_at":value}),
-        );
+        let events = parse_codex_line(&bytes(json!({
+            "type":"event_msg","timestamp":1000,
+            "payload":{"type":"task_started","started_at":value}
+        })))
+        .unwrap();
         assert_eq!(events[0].timestamp, expected)
     }
     for bad in [json!(1.5), json!({}), json!("bad"), json!(i64::MAX)] {

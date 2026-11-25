@@ -49,7 +49,7 @@ pub fn reconstruct_session_events(
                 .join("\n");
             if !text.is_empty() {
                 events.push(event(
-                    "user_prompt",
+                    "turn_start",
                     msg.time_created,
                     cwd,
                     "",
@@ -79,7 +79,7 @@ pub fn reconstruct_session_events(
                             if p.part_type == "reasoning" {
                                 "thinking"
                             } else {
-                                "text"
+                                "agent_message"
                             },
                             ts,
                             cwd,
@@ -105,7 +105,7 @@ pub fn reconstruct_session_events(
                         .unwrap_or(ts);
                     let input = state.and_then(|s| s.input.clone());
                     events.push(event(
-                        "tool_use",
+                        "tool_call",
                         start,
                         cwd,
                         "",
@@ -215,17 +215,29 @@ pub fn reconstruct_session_events(
                     .map(|p| p.time_created)
                     .fold(msg.time_created, i64::max)
             });
-        let usage = msg.data.tokens.as_ref().map(|u| TokenUsage {
-            input: u.input,
-            output: u.output,
-            cache_read: u.cache.read,
-            cache_write: u.cache.write,
-            reasoning: u.reasoning,
-            total: if u.total != 0 {
-                u.total
-            } else {
-                u.input + u.output + u.cache.read + u.cache.write
-            },
+        let usage = msg.data.tokens.as_ref().map(|u| {
+            let base = i128::from(u.input)
+                + i128::from(u.output)
+                + i128::from(u.cache.read)
+                + i128::from(u.cache.write);
+            let includes_reasoning = match (u.reasoning, i128::from(u.total)) {
+                (reasoning, total) if reasoning > 0 && total == base => true,
+                (reasoning, total) if reasoning > 0 && total == base + i128::from(reasoning) => {
+                    false
+                }
+                _ => output_includes_reasoning(&session.version),
+            };
+            let reasoning = if includes_reasoning { 0 } else { u.reasoning };
+            let total = (base + i128::from(reasoning))
+                .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+            TokenUsage {
+                input: u.input,
+                output: u.output.saturating_add(reasoning),
+                cache_read: u.cache.read,
+                cache_write: u.cache.write,
+                reasoning: u.reasoning,
+                total: if u.total != 0 { u.total } else { total },
+            }
         });
         let stop = msg.data.finish.as_ref().filter(|s| !s.is_empty()).cloned();
         if usage.is_some() || stop.is_some() || msg.data.cost.is_some() {

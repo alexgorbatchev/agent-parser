@@ -23,6 +23,8 @@ pub struct DiffHunk {
 pub struct FileModification {
     pub action: String,
     pub file_path: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub previous_path: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hunks: Vec<DiffHunk>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +43,10 @@ pub struct TokenUsage {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct EventData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_message_uuids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<crate::SkillInvocation>,
     #[serde(skip_serializing_if = "Option::is_none")]

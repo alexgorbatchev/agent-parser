@@ -13,9 +13,15 @@ pub struct CodexParser {
     current_model: String,
     context_window: i64,
     rate_limit_reset_at: Option<i64>,
+    session_meta_seen: bool,
+    history_start_ordinal: Option<u64>,
+    paginated: bool,
+    turn_open: bool,
+    pending_turn_start: Option<ParsedEvent>,
+    held_turn_events: Vec<ParsedEvent>,
 }
 pub fn parse_codex_line(line: &[u8]) -> Result<Vec<ParsedEvent>, Error> {
-    CodexParser::default().parse_line(line)
+    CodexParser::default().parse_line_inner(line, false)
 }
 impl CodexParser {
     pub fn new() -> Self {
@@ -25,10 +31,17 @@ impl CodexParser {
         *self = Self::default()
     }
     pub fn parse_line(&mut self, line: &[u8]) -> Result<Vec<ParsedEvent>, Error> {
+        self.parse_line_inner(line, true)
+    }
+    fn parse_line_inner(&mut self, line: &[u8], stateful: bool) -> Result<Vec<ParsedEvent>, Error> {
         if line.iter().all(u8::is_ascii_whitespace) {
             return Ok(vec![]);
         }
         let raw = record(line)?;
+        if matches!((self.history_start_ordinal, raw["ordinal"].as_u64()), (Some(start), Some(at)) if at < start)
+        {
+            return Ok(vec![]);
+        }
         crate::validation::codex(&raw)?;
         let mut ts = timestamp(&raw["timestamp"]);
         let p = &raw["payload"];
@@ -43,6 +56,11 @@ impl CodexParser {
         }
         match kind {
             "session_meta" => {
+                if !self.session_meta_seen {
+                    self.session_meta_seen = true;
+                    self.history_start_ordinal = p["subagent_history_start_ordinal"].as_u64();
+                    self.paginated = stateful && s(p, "history_mode") == "paginated";
+                }
                 if !s(p, "timestamp").is_empty() {
                     ts = timestamp(&p["timestamp"])
                 }
@@ -111,19 +129,98 @@ impl CodexParser {
                     ))
                 }
             }
-            "event_msg" => events = self.parse_event_message(p, ts)?,
-            "response_item" => events = parse_response_item(p, ts)?,
+            "event_msg" => {
+                events = self.parse_event_message(p, ts, stateful)?;
+                if s(p, "type") == "task_started" && stateful {
+                    let previous = self.release_turn_start();
+                    self.turn_open = true;
+                    self.pending_turn_start = events.pop();
+                    return Ok(previous);
+                }
+            }
+            "response_item" => {
+                let prompt = s(p, "type") == "message" && s(p, "role") == "user";
+                if !prompt || !(self.paginated || crate::codex_context::is_context(&p["content"])) {
+                    events = parse_response_item(p, ts)?;
+                }
+            }
+            "compacted" => {
+                let compacted: Compacted = serde_json::from_value(p.clone())?;
+                events.push(event(
+                    "compaction",
+                    ts,
+                    "",
+                    "",
+                    EventData {
+                        content: compacted.message.filter(|message| !message.is_empty()),
+                        ..Default::default()
+                    },
+                ));
+            }
             _ => {}
         }
-        Ok(events)
+        if let Some(index) = events.iter().position(|event| {
+            event.event_type == "turn_start" && event.data.role.as_deref() == Some("user")
+        }) && self.turn_open
+        {
+            if let Some(start) = &mut self.pending_turn_start {
+                start.data = std::mem::take(&mut events.remove(index).data);
+            } else {
+                let prompt = &mut events[index];
+                prompt.event_type = "message_absorbed".into();
+                prompt.data.last_prompt = None;
+                prompt.data.title = None;
+            }
+            let mut turn = self.release_turn_start();
+            turn.append(&mut events);
+            return Ok(turn);
+        }
+        if events.is_empty() || self.pending_turn_start.is_none() {
+            return Ok(events);
+        }
+        if events
+            .iter()
+            .all(|event| matches!(event.event_type.as_str(), "compaction" | "model_change"))
+        {
+            self.held_turn_events.append(&mut events);
+            return Ok(events);
+        }
+        let mut released = self.release_turn_start();
+        released.append(&mut events);
+        Ok(released)
     }
-    fn parse_event_message(&mut self, p: &Value, ts: i64) -> Result<Vec<ParsedEvent>, Error> {
+    fn release_turn_start(&mut self) -> Vec<ParsedEvent> {
+        let mut events: Vec<_> = self.pending_turn_start.take().into_iter().collect();
+        events.append(&mut self.held_turn_events);
+        events
+    }
+    fn parse_event_message(
+        &mut self,
+        p: &Value,
+        ts: i64,
+        stateful: bool,
+    ) -> Result<Vec<ParsedEvent>, Error> {
         let mut events = vec![];
         match s(p, "type") {
             "item_completed" => {
                 let item = &p["item"];
+                if matches!(s(item, "type"), "FileChange" | "file_change") {
+                    return crate::codex_file_change::events(item, ts);
+                }
                 if let Some(skills) = crate::skill::codex_item(item)? {
                     events.push(event("skill_invoked", ts, "", "", skills));
+                }
+                if self.paginated && matches!(s(item, "type"), "UserMessage" | "user_message") {
+                    let text: String = item["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|part| s(part, "type") == "text")
+                        .map(|part| s(part, "text"))
+                        .collect();
+                    if let Some(prompt) = user_data(&text) {
+                        events.insert(0, event("turn_start", ts, "", "", prompt));
+                    }
                 }
                 if s(item, "type") == "AgentMessage" {
                     let text = item["content"]
@@ -168,12 +265,13 @@ impl CodexParser {
                     }
                 }
             }
-            "user_message" => {
+            "patch_apply_end" => return crate::codex_file_change::events(p, ts),
+            "user_message" if !stateful => {
                 if let Some(data) = user_data(s(p, "message")) {
                     events.push(event("turn_start", ts, "", "", data))
                 }
             }
-            "agent_message" => {
+            "agent_message" if !stateful => {
                 if !s(p, "message").is_empty() {
                     events.push(event(
                         "agent_message",
@@ -258,14 +356,17 @@ impl CodexParser {
                     ))
                 }
             }
-            "task_started" | "task_complete" => {
-                let complete = s(p, "type") == "task_complete";
+            "task_started" | "task_complete" | "turn_aborted" => {
+                let complete = s(p, "type") != "task_started";
                 let field = if complete {
                     "completed_at"
                 } else {
                     "started_at"
                 };
                 let ts = task_timestamp(&p[field], ts)?;
+                if complete {
+                    self.turn_open = false;
+                }
                 events.push(event(
                     if complete { "turn_end" } else { "turn_start" },
                     ts,
@@ -274,6 +375,7 @@ impl CodexParser {
                     EventData {
                         role: Some("assistant".into()),
                         content: complete.then(|| opt(s(p, "last_agent_message"))).flatten(),
+                        stop_reason: opt(s(p, "reason")),
                         ..Default::default()
                     },
                 ))
@@ -289,7 +391,7 @@ impl CodexParser {
                     Some(false) => None,
                     Some(true) => line_reset.or_else(|| {
                         self.rate_limit_reset_at
-                            .map(|at| (at, (at - ts + 999) / 1000))
+                            .map(|at| (at, at.saturating_sub(ts).saturating_add(999) / 1000))
                     }),
                     None => {
                         if line_reset.is_some() {
@@ -323,6 +425,10 @@ impl CodexParser {
             self.rate_limit_reset_at = None
         }
     }
+}
+#[derive(serde::Deserialize)]
+struct Compacted {
+    message: Option<String>,
 }
 pub(crate) fn user_data(prompt: &str) -> Option<EventData> {
     let prompt = clean_codex_prompt(prompt);
@@ -418,7 +524,7 @@ fn rate_reset(rates: &Value, now: i64, error: bool) -> Option<(i64, i64)> {
 }
 fn parse_reset(text: &str, now: i64) -> Option<(i64, i64)> {
     let text = text.trim();
-    if let Ok(ns) = go_parse_duration::parse_duration(text) {
+    if let Some(ns) = crate::parse_go_duration(text) {
         return now
             .checked_add(ns / 1_000_000)
             .map(|at| (at, ns / 1_000_000_000));
@@ -433,6 +539,6 @@ fn parse_reset(text: &str, now: i64) -> Option<(i64, i64)> {
     }
     chrono::DateTime::parse_from_rfc3339(text).ok().map(|t| {
         let at = t.timestamp_millis();
-        (at, ((at - now) / 1000).max(0))
+        (at, (at.saturating_sub(now) / 1000).max(0))
     })
 }

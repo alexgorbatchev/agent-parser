@@ -6,7 +6,7 @@
 - **Streaming state**: Correlates Claude Code usage blocks and carries Codex model and rate-limit state between records.
 - **Headless output**: Normalizes live Claude Code, Codex, and Antigravity streams and retains the latest runner result.
 - **Session discovery**: Finds persisted transcripts and OpenCode sessions, including archives, forks, and subagents.
-- **File changes**: Normalizes single-file writes, string edits, multiple edits, and unified diff hunks.
+- **File changes**: Normalizes write, edit, and delete operations, including recorded Codex file moves and unified diff hunks.
 - **OpenCode snapshots**: Reads sessions, messages, parts, projects, and pending permissions from SQLite, and reconstructs chronological event timelines.
 - **Antigravity metadata**: Reads conversation summaries, parent links, and workspace paths from native SQLite stores and legacy JSON sidecars.
 
@@ -20,7 +20,7 @@
 
 - JSONL parsing is synchronous and operates on the bytes supplied by the caller. It reads no files, environment variables, credentials, network services, or model catalogs.
 - Claude Code deduplicates usage by session and request/message identity. Its bounded FIFO remembers up to 200 identities and evicts the oldest 100 at capacity. Text and tool events retain their source semantics. `reset()` clears correlation state.
-- Codex retains the recorded model, context window, and active rate-limit reset between calls. The stateless `parse_codex_line` helper starts with empty state for each call. Context fullness is not synthesized.
+- Codex retains the recorded model, context window, active rate-limit reset, and turn state between calls. It pairs the first prompt with the turn start and emits subsequent prompts as `message_absorbed`. Stateful parsing skips inherited records when a subagent supplies its first ordinal.
 - Antigravity reads native `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC`, and `SYSTEM_MESSAGE` records from full or compact transcripts. Tool results match pending calls in recorded order; a new user turn clears pending calls. Token totals include input, output, and cache reads; reasoning remains separate. Token-total overflow returns an error without changing parser state.
 - Parsers require mutable access. Use separate instances for independent streams, and synchronize externally when sharing an instance between threads.
 - Skill events identify user and model invocations. Detection uses recorded tool inputs and parses literal shell arguments without executing transcript commands.
@@ -28,7 +28,7 @@
 - Event timestamps are milliseconds since the Unix epoch. Missing envelope timestamps fall back to the current time; Claude Code first inherits its last recorded timestamp. Codex lifecycle timestamps recorded as integer seconds are converted to milliseconds.
 - OpenCode filesystem SQLite databases open read-only with a five-second busy timeout. Snapshot reads use one transaction; callers can interrupt running queries through `interrupt_handle()`. SQLite calls block. `:memory:` creates an isolated in-memory database; `new(connection)` keeps the supplied connection's access policy.
 - Antigravity metadata reads open existing SQLite files read-only with a 100 ms busy timeout. Summary reads use one transaction, support an absent parent-index table, and retain database errors. Workspace reads prefer a nonempty legacy JSON `cwd`, then decode the native trajectory protobuf, limited to 1 MiB. File URIs become platform paths with percent escapes decoded. These helpers read only the paths supplied by the caller; they do not discover sessions or launch the harness.
-- OpenCode session token totals sum input, output, cache reads, and cache writes. Reasoning remains separate. Totals outside the signed 64-bit range return a typed SQLite conversion error.
+- OpenCode token totals include reasoning once. Session totals use the stored OpenCode version. Timelines also use each message's recorded total to detect the accounting format. Session totals outside the signed 64-bit range return a typed SQLite conversion error.
 - Known fields with incorrect JSON types return typed errors. Unknown record types produce no events. Unknown tool parameters remain in `tool_input`.
 - Single-file normalization returns `None` for multi-file unified patches, preserving the original patch in the event's tool input. It does not attribute unrelated hunks to one path.
 
@@ -87,6 +87,8 @@ Output:
 `parse_codex_rollout_path(path: &str) -> Result<CodexRolloutFilenameInfo, Error>` extracts the timestamp, session identity, and optional date partition from flat or partitioned rollout paths, including Windows separators.
 
 `normalize_file_modification(tool_name: &str, input: Option<&serde_json::Map<String, serde_json::Value>>) -> Option<FileModification>` returns single-file `EDIT` or `WRITE` data. Diff line types are `add`, `del`, and `ctx`.
+
+`parse_go_duration` reads a signed Go-style duration in nanoseconds. It returns `None` for unknown units, invalid syntax, or values outside the signed 64-bit range.
 
 ### OpenCode
 

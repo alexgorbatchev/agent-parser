@@ -133,6 +133,21 @@ impl ClaudeCodeParser {
                 }
             }
             "user" => self.parse_user(&raw, key, sub, &mut emit),
+            "queue-operation"
+                if s(&raw, "operation") == "remove"
+                    && s(&raw, "reason") == "absorbed_mid_turn"
+                    && !s(&raw, "commandUuid").is_empty() =>
+            {
+                emit(
+                    "message_absorbed",
+                    EventData {
+                        role: Some("user".into()),
+                        content: raw["content"].as_str().map(str::to_owned),
+                        message_uuid: opt(s(&raw, "commandUuid")),
+                        ..Default::default()
+                    },
+                );
+            }
             "assistant" => self.parse_assistant(&raw, key, &mut emit),
             _ => {}
         }
@@ -255,6 +270,13 @@ impl ClaudeCodeParser {
                         role: Some("user".into()),
                         content: Some(prompt.clone()),
                         last_prompt: Some(prompt),
+                        message_uuid: opt(s(raw, "uuid")),
+                        merged_message_uuids: raw["mergedSendUuids"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|uuid| uuid.as_str().map(str::to_owned))
+                            .collect(),
                         title,
                         ..Default::default()
                     },

@@ -42,7 +42,7 @@ fn sqlite_token_total_overflow_returns_a_typed_conversion_error() {
 fn exact_boundary_totals_preserve_zero_and_negative_source_values_without_overflow() {
     let db = Connection::open_in_memory().unwrap();
     db.execute_batch("CREATE TABLE session(id TEXT,project_id TEXT,parent_id TEXT,slug TEXT,directory TEXT,title TEXT,version TEXT,agent TEXT,model TEXT,cost REAL,tokens_input INTEGER,tokens_output INTEGER,tokens_reasoning INTEGER,tokens_cache_read INTEGER,tokens_cache_write INTEGER,time_created INTEGER,time_updated INTEGER,time_archived INTEGER,metadata TEXT);").unwrap();
-    db.execute("INSERT INTO session VALUES('s',NULL,NULL,NULL,'/repo',NULL,NULL,NULL,NULL,0,?,0,123,0,0,1000,2000,NULL,NULL)",[i64::MAX]).unwrap();
+    db.execute("INSERT INTO session VALUES('s',NULL,NULL,NULL,'/repo',NULL,'1.3.15',NULL,NULL,0,?,0,123,0,0,1000,2000,NULL,NULL)",[i64::MAX]).unwrap();
     let reader = OpencodeDb::new(db);
     assert_eq!(reader.get_sessions().unwrap()[0].tokens.total, i64::MAX);
     reader

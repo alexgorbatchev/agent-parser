@@ -1,6 +1,9 @@
 default:
     @just --list
 
+setup:
+    cargo fetch --locked
+
 fmt:
     cargo fmt --package agent-parser
 

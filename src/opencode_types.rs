@@ -1,5 +1,20 @@
 use crate::Error;
 use serde::{Deserialize, Serialize};
+
+pub(crate) fn output_includes_reasoning(version: &str) -> bool {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let (release, prerelease) = version.split_once('-').unwrap_or((version, ""));
+    let mut parts = release.split('.');
+    let mut numbers = [0; 3];
+    for number in &mut numbers {
+        let Some(part) = parts.next().and_then(|part| part.parse::<i32>().ok()) else {
+            return false;
+        };
+        *number = part;
+    }
+    parts.next().is_none()
+        && (numbers < [1, 3, 16] || (numbers == [1, 3, 16] && !prerelease.is_empty()))
+}
 use serde_json::{Map, Value};
 pub const DEFAULT_OPENCODE_DB_PATH: &str = ".local/share/opencode/opencode.db";
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -178,8 +178,18 @@ fn scan_session(r: &Row<'_>) -> rusqlite::Result<OpencodeSession> {
         r.get::<_, i64>(14)?,
     );
     let metadata: Option<String> = r.get(18)?;
+    let version = r.get::<_, Option<String>>(6)?.unwrap_or_default();
+    let extra = if output_includes_reasoning(&version) {
+        0
+    } else {
+        reasoning
+    };
     let total = i64::try_from(
-        i128::from(input) + i128::from(output) + i128::from(read) + i128::from(write),
+        i128::from(input)
+            + i128::from(output)
+            + i128::from(read)
+            + i128::from(write)
+            + i128::from(extra),
     )
     .map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -196,7 +206,7 @@ fn scan_session(r: &Row<'_>) -> rusqlite::Result<OpencodeSession> {
         slug: r.get(3)?,
         directory: r.get(4)?,
         title: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
-        version: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        version,
         agent: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
         model,
         model_config,
